@@ -24,6 +24,8 @@
   .add input{position:absolute;width:1px;height:1px;opacity:0}
   .add span{display:block;text-align:center;padding:11px 14px;border-radius:6px;background:var(--ink);color:var(--white);font-weight:600;cursor:pointer}
   .add input:focus-visible + span{outline:3px solid var(--balise);outline-offset:2px}
+  .export{display:block;width:calc(100% - 40px);margin:0 20px 12px;padding:9px 14px;border-radius:6px;border:1px solid var(--ink);background:var(--white);color:var(--ink);font:inherit;font-weight:600;cursor:pointer}
+  .export:disabled{opacity:.45;cursor:default}
   .msg{margin:0 20px 10px;font-size:.88rem;color:var(--muted);min-height:1em}
   .msg.err{color:var(--balise)}
   ul{list-style:none;margin:0;padding:0;overflow-y:auto;flex:1;border-top:1px solid var(--line)}
@@ -52,9 +54,10 @@
       <p class="totals" id="totals">Chargement…</p>
     </header>
     <label class="add">
-      <input type="file" id="file" multiple accept=".gpx,.tcx,.gz">
-      <span>Ajouter des traces (GPX, TCX)</span>
+      <input type="file" id="file" multiple accept=".gpx,.tcx,.gz,.geojson,.json">
+      <span>Ajouter des traces (GPX, TCX) ou une sauvegarde</span>
     </label>
+    <button class="export" id="export" type="button">Exporter la sauvegarde (GeoJSON)</button>
     <p class="msg" id="msg" role="status"></p>
     <ul id="list"></ul>
   </aside>
@@ -120,17 +123,27 @@ async function fileText(file){
 
 function first(el, tag){ return el ? el.getElementsByTagNameNS('*',tag)[0] : undefined; }
 
+// Renvoie une liste de randonnées : une seule pour un GPX/TCX, plusieurs pour une sauvegarde GeoJSON
 async function parse(file){
   const lower=file.name.toLowerCase();
   if(lower.includes('.fit')) throw new Error(file.name+' : format FIT non lu. Exportez l’activité en GPX depuis Strava.');
-  const doc=new DOMParser().parseFromString((await fileText(file)).trim(),'application/xml');
-  if(doc.getElementsByTagName('parsererror').length) throw new Error(file.name+' : fichier illisible.');
+  const text=(await fileText(file)).trim();
+  if(/\.(geo)?json(\.gz)?$/.test(lower)) return parseGeoJSON(text, file.name);
+  return [parseTrack(text, file.name)];
+}
+
+// Altitude : conservée seulement si tous les points en ont une, pour garder des positions homogènes
+function ele(el, tag){ const v=parseFloat(first(el,tag)?.textContent); return isFinite(v)?v:null; }
+
+function parseTrack(text, fname){
+  const doc=new DOMParser().parseFromString(text,'application/xml');
+  if(doc.getElementsByTagName('parsererror').length) throw new Error(fname+' : fichier illisible.');
   let raw=[], name, type, date;
   const trkpts=doc.getElementsByTagNameNS('*','trkpt');
   if(trkpts.length){
     for(const p of trkpts){
       const lat=parseFloat(p.getAttribute('lat')), lon=parseFloat(p.getAttribute('lon'));
-      if(isFinite(lat)&&isFinite(lon)) raw.push([lat,lon]);
+      if(isFinite(lat)&&isFinite(lon)) raw.push([lat,lon,ele(p,'ele')]);
     }
     const trk=first(doc,'trk');
     name=first(trk,'name')?.textContent;
@@ -140,21 +153,51 @@ async function parse(file){
     const tps=doc.getElementsByTagNameNS('*','Trackpoint');
     for(const p of tps){
       const lat=parseFloat(first(p,'LatitudeDegrees')?.textContent), lon=parseFloat(first(p,'LongitudeDegrees')?.textContent);
-      if(isFinite(lat)&&isFinite(lon)) raw.push([lat,lon]);
+      if(isFinite(lat)&&isFinite(lon)) raw.push([lat,lon,ele(p,'AltitudeMeters')]);
     }
     const act=first(doc,'Activity');
     type=act?.getAttribute('Sport');
     date=first(tps[0],'Time')?.textContent || first(act,'Id')?.textContent;
   }
-  if(raw.length<2) throw new Error(file.name+' : aucune trace GPS trouvée.');
+  if(raw.length<2) throw new Error(fname+' : aucune trace GPS trouvée.');
   let dist=0; for(let i=1;i<raw.length;i++) dist+=haversine(raw[i-1],raw[i]);
   // allègement : un point tous les 8 m environ, pour le stockage
   const pts=[raw[0]];
   for(let i=1;i<raw.length-1;i++) if(haversine(pts[pts.length-1],raw[i])>=8) pts.push(raw[i]);
   pts.push(raw[raw.length-1]);
-  const rounded=pts.map(([a,b])=>[+a.toFixed(5),+b.toFixed(5)]);
-  const id=((date||'')+'_'+rounded[0].join('_')).replace(/[^0-9A-Za-z_.-]/g,'');
-  return {id, name:(name||file.name.replace(/\.(gpx|tcx)(\.gz)?$/i,'')).trim(), date:date||null, type:type||null, km:+(dist/1000).toFixed(1), pts:rounded};
+  const withEle=pts.every(p=>p[2]!==null);
+  const rounded=pts.map(([a,b,e])=>withEle?[+a.toFixed(5),+b.toFixed(5),+e.toFixed(1)]:[+a.toFixed(5),+b.toFixed(5)]);
+  return {id:makeId(date,rounded[0]), name:(name||fname.replace(/\.(gpx|tcx)(\.gz)?$/i,'')).trim(), date:date||null, type:type||null, km:+(dist/1000).toFixed(1), pts:rounded};
+}
+
+// Identifiant : date de début + premier point (lat, lon uniquement)
+function makeId(date, p){ return ((date||'')+'_'+p[0]+'_'+p[1]).replace(/[^0-9A-Za-z_.-]/g,''); }
+
+// Sauvegarde : FeatureCollection RFC 7946, une LineString par randonnée, positions [lon, lat(, alt)]
+function parseGeoJSON(text, fname){
+  let gj; try{ gj=JSON.parse(text); }catch(e){ throw new Error(fname+' : JSON illisible.'); }
+  if(gj?.type!=='FeatureCollection'||!Array.isArray(gj.features)) throw new Error(fname+' : ce n’est pas une FeatureCollection GeoJSON.');
+  const out=[];
+  for(const f of gj.features){
+    const c=f?.geometry?.type==='LineString'?f.geometry.coordinates:null;
+    if(!Array.isArray(c)||c.length<2) continue;
+    const pts=c.filter(p=>isFinite(p[0])&&isFinite(p[1])).map(p=>p.length>2&&isFinite(p[2])?[p[1],p[0],p[2]]:[p[1],p[0]]);
+    if(pts.length<2) continue;
+    const pr=f.properties||{};
+    let km=+pr.km;
+    if(!isFinite(km)){ let d=0; for(let i=1;i<pts.length;i++) d+=haversine(pts[i-1],pts[i]); km=+(d/1000).toFixed(1); }
+    out.push({id:pr.id||makeId(pr.date,pts[0]), name:String(pr.name||'Sans nom'), date:pr.date||null, type:pr.type||null, km, pts});
+  }
+  if(!out.length) throw new Error(fname+' : aucune randonnée (LineString) trouvée.');
+  return out;
+}
+
+function toGeoJSON(){
+  return {type:'FeatureCollection', features:[...hikes.values()].map(h=>({
+    type:'Feature',
+    properties:{id:h.id, name:h.name, date:h.date, type:h.type, km:h.km},
+    geometry:{type:'LineString', coordinates:h.pts.map(p=>p.length>2?[p[1],p[0],p[2]]:[p[1],p[0]])}
+  }))};
 }
 
 function draw(h){
@@ -172,6 +215,7 @@ function fmtDate(d){ if(!d) return 'Date inconnue'; const x=new Date(d); return 
 
 function render(){
   const list=$('list'); list.innerHTML='';
+  $('export').disabled=!hikes.size;
   const arr=[...hikes.values()].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   const total=arr.reduce((s,h)=>s+h.km,0);
   $('totals').textContent = arr.length ? `${arr.length} randonnée${arr.length>1?'s':''}, ${total.toLocaleString('fr-FR',{maximumFractionDigits:1})} km au total` : 'Aucune trace pour l’instant';
@@ -217,10 +261,11 @@ $('file').addEventListener('change', async e=>{
   let added=0, dup=0, unsaved=0; const errors=[];
   for(const f of files){
     try{
-      const h=await parse(f);
-      if(hikes.has(h.id)){ dup++; continue; }
-      hikes.set(h.id,h); draw(h); added++;
-      if(!(await save(h))) unsaved++;
+      for(const h of await parse(f)){
+        if(hikes.has(h.id)){ dup++; continue; }
+        hikes.set(h.id,h); draw(h); added++;
+        if(!(await save(h))) unsaved++;
+      }
     }catch(err){ errors.push(err.message); }
   }
   render(); if(added) fitAll();
@@ -229,6 +274,17 @@ $('file').addEventListener('change', async e=>{
   if(unsaved) t+=` ${unsaved} non conservée${unsaved>1?'s':''} pour la prochaine ouverture (stockage indisponible).`;
   if(errors.length) t+=' '+errors.join(' ');
   say(t, errors.length>0 || unsaved>0);
+});
+
+$('export').addEventListener('click', ()=>{
+  if(!hikes.size) return;
+  const blob=new Blob([JSON.stringify(toGeoJSON())],{type:'application/geo+json'});
+  const d=new Date(), day=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download=`randonnees-${day}.geojson`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  say(`Sauvegarde exportée : ${hikes.size} randonnée${hikes.size>1?'s':''}.`);
 });
 
 (async function init(){
