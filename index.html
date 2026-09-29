@@ -115,7 +115,11 @@ async function unlock(password){
   let gj;
   try{ gj=await Chiffrement.decrypt(envelope, password); }
   catch(e){ if(e.code==='BAD_PASSWORD') return false; throw e; }
-  for(const h of depuisGeoJSON(gj, 'Données publiées')){ hikes.set(h.id,h); layers.set(h.id, dessinerTrace(map, h, id=>select(id,false), h.surGR34, true)); }
+  for(const h of depuisGeoJSON(gj, 'Données publiées')){
+    const g=dessinerTrace(map, h, id=>select(id,false), h.surGR34, true);
+    ajouterRaccords(g, h, h.surGR34, gj.progression?.parcouru);
+    hikes.set(h.id,h); layers.set(h.id, g);
+  }
   // Progression calculée dans la page d'administration au moment de l'export (absente des exports plus anciens)
   avecProgression=!!gj.progression?.parcouru;
   afficherParcouru(map, gj.progression, null, true);

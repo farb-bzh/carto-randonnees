@@ -40,10 +40,11 @@ Seul le tracé principal compte (pas les variantes).
    direction proche (écart d'angle ≤ 45°). Au-delà du départ et de l'arrivée d'une trace, rien n'est compté.
 3. Les **trous** de moins de 100 m entre deux portions parcourues sont comblés ; les portions de moins de 200 m
    sont retirées (croisements, frôlements). Un morceau parcouru plusieurs fois ne compte qu'une fois.
-4. **Contournements** : quand une trace quitte le GR34 puis le rejoint plus loin (balisage modifié, sentier parallèle),
-   la portion du GR34 contournée est listée dans l'admin. Elle ne compte que si vous choisissez « Compter la portion ».
-   Ne sont proposées que les portions en majorité non parcourues, et pas beaucoup plus longues que le détour
-   (sinon il s'agit du retour intérieur d'une boucle, pas d'un contournement).
+4. **Portions à arbitrer** (de 100 m à 2 km), listées dans l'admin ; elles ne comptent que si vous choisissez
+   « Compter la portion » :
+   - portion non parcourue **encadrée** par deux portions parcourues (balisage modifié, passage par l'intérieur…) ;
+   - portion non parcourue qu'une trace **longe** à moins de 2 × la tolérance (sentier parallèle un peu éloigné).
+   Le retour intérieur d'une boucle n'est pas proposé : la portion côtière correspondante a été parcourue à l'aller.
    La décision est enregistrée avec la randonnée (navigateur et sauvegarde GeoJSON).
 
 Les réglages se modifient dans « Réglages du calcul » (mémorisés dans le navigateur).

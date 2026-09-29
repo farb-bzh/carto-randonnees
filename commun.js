@@ -54,6 +54,31 @@ function dessinerTrace(map, h, onClick, surGR34, horsGR34Seulement){
   g.eachLayer(l=>l.on('click',()=>onClick(h.id)));
   return g.addTo(map);
 }
+// Carte publique : les portions sur le GR34 sont remplacées par le GR34 parcouru, qui suit le tracé OSM et non
+// la trace GPS. Chaque morceau hors GR34 est prolongé jusqu'au point le plus proche du GR34 parcouru (≤ `max` m),
+// pour ne pas laisser de trou aux jonctions.
+function ajouterRaccords(g, h, surGR34, parcouru, max=80){
+  if(!Array.isArray(surGR34) || !parcouru?.coordinates?.length) return;
+  const n=h.pts.length, bords=[];
+  for(const [a,b] of surGR34){ if(a>0) bords.push(a); if(b<n-1) bords.push(b); }
+  for(const i of bords){
+    const q=h.pts[i], c=Math.cos(q[0]*Math.PI/180), k=111195;
+    let best=null, bd=max;
+    for(const ligne of parcouru.coordinates) for(let j=1;j<ligne.length;j++){
+      const [o1,a1]=ligne[j-1], [o2,a2]=ligne[j];
+      const x1=(o1-q[1])*c*k, y1=(a1-q[0])*k, x2=(o2-q[1])*c*k, y2=(a2-q[0])*k, vx=x2-x1, vy=y2-y1, L2=vx*vx+vy*vy;
+      if(Math.min(Math.abs(x1),Math.abs(x2))>bd && Math.sign(x1)===Math.sign(x2)) continue;
+      let t=L2?-(x1*vx+y1*vy)/L2:0; t=t<0?0:t>1?1:t;
+      const d=Math.hypot(x1+t*vx, y1+t*vy);
+      if(d<bd){ bd=d; best=[a1+t*(a2-a1), o1+t*(o2-o1)]; }
+    }
+    if(best && bd>1){
+      g.addLayer(L.polyline([q,best],{color:'#FFFFFF',weight:7,opacity:.95}));
+      g.addLayer(L.polyline([q,best],{color:COULEUR_HORS_GR34,weight:3.5,trait:true}));
+    }
+  }
+}
+
 // Épaisseur des traits colorés (mise en évidence de la randonnée sélectionnée)
 function epaisseurTrace(g, w){ g.eachLayer(l=>{ if(l.options.trait) l.setStyle({weight:w}); }); }
 

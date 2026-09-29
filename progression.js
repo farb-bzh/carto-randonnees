@@ -150,74 +150,110 @@ const Progression = (() => {
     for(let i=0;i<ref.n;i++){ const k=cle(Math.floor(ref.mLat[i]/CELLULE),Math.floor(ref.mLon[i]/CELLULE)); (g.get(k)||g.set(k,[]).get(k)).push(i); }
     return ref._grille={g, cle};
   }
-  function plusProche(ref, la, lo, tol){
-    const {g, cle}=indexMorceaux(ref), cy=Math.floor(la/CELLULE), cx=Math.floor(lo/CELLULE);
-    let bd=tol, bi=-1;
-    for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) for(const i of g.get(cle(cy+dy,cx+dx))||[]){
-      const d=haversine([la,lo],[ref.mLat[i],ref.mLon[i]]); if(d<=bd){ bd=d; bi=i; }
-    }
-    return bi;
-  }
-  const ligneDe=(ref,i)=>ref.lignes.findIndex(([a,b])=>i>=a&&i<b);
+  const TROU_MAX=2000;   // au-delà, une portion non parcourue n'est pas proposée à l'arbitrage
 
-  // Contournements d'une randonnée : la trace quitte le GR34 en A et le rejoint en B sur la même ligne du tracé.
-  // Renvoie la portion du GR34 entre A et B (morceaux [debut, fin[) et la longueur de trace hors GR34.
-  // `couvert` : couverture déjà acquise ; les morceaux déjà couverts ne sont pas comptés dans la portion.
-  function contournements(ref, h, p, couvert){
-    const ENTREE_MIN=100;   // une portion « sur le GR34 » doit faire au moins 100 m de trace pour servir d'appui
-    const pts=h.pts, pos=pts.map(q=>plusProche(ref, q[0], q[1], p.tolerance));
-    // suites de points sur / hors du GR34
-    const suites=[]; let cur=null, km=0;
-    pts.forEach((q,i)=>{ const L=i?haversine(pts[i-1],q):0; km+=L; const sur=pos[i]>=0;
-      if(!cur||cur.sur!==sur){ cur={sur, i0:i, i1:i, m:0, km0:km}; suites.push(cur); } cur.i1=i; cur.m+=L; });
-    // les suites « sur » trop courtes (croisements) sont traitées comme hors GR34
-    for(const s of suites) if(s.sur && s.m<ENTREE_MIN) s.sur=false;
-    const appuis=suites.filter(s=>s.sur);
-    const out=[];
-    for(let k=1;k<appuis.length;k++){
-      const avant=appuis[k-1], apres=appuis[k];
-      const a=pos[avant.i1], b=pos[apres.i0], la=ligneDe(ref,a);
-      if(la<0 || la!==ligneDe(ref,b)) continue;
-      const debut=Math.min(a,b), fin=Math.max(a,b)+1;
-      let gr=0, portion=0; for(let i=debut;i<fin;i++){ portion+=ref.len[i]; if(!couvert[i]) gr+=ref.len[i]; }
-      if(gr<=p.trou) continue;                         // déjà comblé automatiquement
-      let trace=0; for(let i=avant.i1+1;i<=apres.i0;i++) trace+=haversine(pts[i-1],pts[i]);
-      // garde-fous : A et B ne délimitent pas un contournement (ex. : retour intérieur d'une boucle, retour au départ)
-      //  - si la portion du GR34 entre A et B est bien plus longue que le détour de la trace ;
-      //  - si cette portion a été en majorité parcourue (à l'aller d'une boucle, par exemple).
-      if(portion>3*trace+500) continue;
-      if(gr<0.5*portion) continue;
-      // morceaux non couverts de la portion, pour l'affichage
-      const trous=[]; for(let i=debut;i<fin;){ if(couvert[i]){ i++; continue; } let j=i; while(j<fin && !couvert[j]) j++; trous.push([i,j]); i=j; }
-      const mil=(debut+fin)>>1;
-      out.push({rando:h.id, debut, fin, trous, gr_m:Math.round(gr), trace_m:Math.round(trace), i_a:avant.i1, i_b:apres.i0,
-        km_trace:+(avant.km0/1000+avant.m/1000).toFixed(2), centre:[+ref.mLat[mil].toFixed(5), +ref.mLon[mil].toFixed(5)]});
+  // Portions à arbitrer (« contournements »), de plus de `trou` m (les plus courtes sont déjà comblées) :
+  //  1. portions du GR34 NON parcourues, encadrées de part et d'autre par des portions parcourues sur une même ligne
+  //     du tracé, d'au plus TROU_MAX m (balisage modifié, sentier parallèle, passage par l'intérieur…) ;
+  //  2. portions NON parcourues qu'une trace longe à faible distance (`large` : couverture avec 2 × la tolérance).
+  // Chaque portion est rattachée à une randonnée publiée (pour situer et colorer la trace).
+  // `cov` : couverture de l'ensemble des randonnées publiées ; `propres` : couverture de chaque randonnée.
+  function contournements(ref, randos, propres, cov, large, p){
+    const out=[], pris=new Uint8Array(ref.n);
+    for(const [a,b] of ref.lignes){
+      for(let i=a;i<b;){
+        if(cov[i]){ i++; continue; }
+        let j=i, L=0; while(j<b && !cov[j]){ L+=ref.len[j]; j++; }
+        if(i>a && j<b && L>p.trou && L<=TROU_MAX){
+          // randonnée qui parcourt les deux bords (à défaut, l'un des deux)
+          let k=randos.findIndex((h,q)=>h.gr34 && propres[q][i-1] && propres[q][j]);
+          if(k<0) k=randos.findIndex((h,q)=>h.gr34 && (propres[q][i-1] || propres[q][j]));
+          if(k>=0){ out.push(situer(ref, randos[k], k, i, j, L)); pris.fill(1, i, j); }
+        }
+        i=j;
+      }
     }
+    randos.forEach((h,k)=>{
+      if(!h.gr34) return;
+      for(const [a,b] of ref.lignes){
+        for(let i=a;i<b;){
+          if(cov[i] || pris[i] || !large[k][i]){ i++; continue; }
+          let j=i, L=0; while(j<b && !cov[j] && !pris[j] && large[k][j]){ L+=ref.len[j]; j++; }
+          if(L>p.trou && L<=TROU_MAX){ out.push(situer(ref, h, k, i, j, L)); pris.fill(1, i, j); }
+          i=j;
+        }
+      }
+    });
     return out;
+  }
+
+  // Position d'un contournement sur la trace de la randonnée : points les plus proches des deux bords
+  function situer(ref, h, k, debut, fin, L){
+    const pts=h.pts, proche=m=>{ let bd=Infinity, bi=0; pts.forEach((q,i)=>{ const d=haversine(q,[ref.mLat[m],ref.mLon[m]]); if(d<bd){ bd=d; bi=i; } }); return bi; };
+    let i_a=proche(debut-1), i_b=proche(fin); if(i_a>i_b) [i_a,i_b]=[i_b,i_a];
+    let avant=0, trace=0; for(let i=1;i<=i_b;i++){ const d=haversine(pts[i-1],pts[i]); if(i<=i_a) avant+=d; else trace+=d; }
+    const mil=(debut+fin)>>1;
+    return {rando:h.id, k, debut, fin, trous:[[debut,fin]], gr_m:Math.round(L), trace_m:Math.round(trace), i_a, i_b,
+      km_trace:+(avant/1000).toFixed(2), centre:[+ref.mLat[mil].toFixed(5), +ref.mLon[mil].toFixed(5)]};
   }
 
   // Portions d'une trace « sur le GR34 », pour l'affichage : un point est sur le GR34 si le morceau le plus proche
   // (à moins de la tolérance) est compté pour cette randonnée, ou s'il appartient à un contournement compté.
   // Renvoie des intervalles d'indices de points [[début, fin], …] (bornes incluses).
   function segmentsSurGR34(ref, h, cov, acceptes, p){
-    const n=h.pts.length, sur=new Uint8Array(n);
-    h.pts.forEach((q,i)=>{ const k=plusProche(ref, q[0], q[1], p.tolerance); if(k>=0 && cov[k]) sur[i]=1; });
+    const n=h.pts.length, sur=new Uint8Array(n), amax=p.angle*D2R, pts=h.pts, {g, cle}=indexMorceaux(ref);
+    // Un morceau compté à moins de `dist` mètres du point q, et (si `dir` est fourni) orienté comme la trace ?
+    // Tous les morceaux à portée sont examinés (le tracé OSM peut superposer deux lignes au même endroit).
+    const procheCompte=(q, dist, dir)=>{
+      const cy=Math.floor(q[0]/CELLULE), cx=Math.floor(q[1]/CELLULE);
+      for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) for(const k of g.get(cle(cy+dy,cx+dx))||[]){
+        if(!cov[k] || haversine(q,[ref.mLat[k],ref.mLon[k]])>dist) continue;
+        if(dir==null) return true;
+        let da=Math.abs(dir-ref.dir[k])%Math.PI; if(da>Math.PI/2) da=Math.PI-da;
+        if(da<=amax) return true;
+      }
+      return false;
+    };
+    // mêmes critères que le calcul : proche d'un morceau compté ET dans la même direction que le sentier
+    // (un chemin d'accès qui arrive perpendiculairement au GR34 reste « hors GR34 »)
+    pts.forEach((q,i)=>{
+      const a=pts[Math.max(0,i-1)], b=pts[Math.min(n-1,i+1)];
+      const dir=(a[0]!==b[0]||a[1]!==b[1]) ? Math.atan2(b[0]-a[0], (b[1]-a[1])*Math.cos(q[0]*D2R)) : null;
+      if(procheCompte(q, p.tolerance, dir)) sur[i]=1;
+    });
+    // suites de points de même état : [début, fin exclue, longueur de trace en m]
+    const suites=()=>{ const out=[]; for(let i=0;i<n;){ let j=i, L=0; while(j<n && sur[j]===sur[i]){ if(j>i) L+=haversine(pts[j-1],pts[j]); j++; }
+      if(i>0) L+=haversine(pts[i-1],pts[i]); if(j<n) L+=haversine(pts[j-1],pts[j]); out.push([i,j,L]); i=j; } return out; };
+    // 1. passage sur le GR34 plus court que `minimum` (bout de chemin d'accès, croisement) -> hors GR34
+    for(const [i,j,L] of suites()) if(sur[i] && L<p.minimum) sur.fill(0, i, j);
+    // 2. contournements comptés -> sur le GR34
     for(const c of acceptes) sur.fill(1, c.i_a, c.i_b+1);
-    // lissage, cohérent avec le calcul : un écart de trace de moins de `trou` mètres entre deux passages sur le GR34
-    // reste « sur le GR34 » ; un passage sur le GR34 de moins de 3 points (croisement) redevient « hors GR34 »
-    for(let i=0;i<n;){
-      let j=i, L=0; while(j<n && sur[j]===sur[i]){ if(j>i) L+=haversine(h.pts[j-1],h.pts[j]); j++; }
-      if(i>0 && j<n && (sur[i] ? j-i<3 : L+haversine(h.pts[i-1],h.pts[i])+haversine(h.pts[j-1],h.pts[j])<=p.trou)) sur.fill(sur[i-1], i, j);
-      i=j;
+    // 3. écart entre deux passages sur le GR34 dû à l'imprécision GPS -> sur le GR34 : écart de moins de `trou` mètres,
+    //    ou dont tous les points restent à moins de 2 × la tolérance d'une portion comptée (un vrai détour s'éloigne plus)
+    for(const [i,j,L] of suites()){
+      if(sur[i] || i===0 || j===n) continue;
+      let colle=true; for(let k=i;k<j && colle;k++) colle=procheCompte(pts[k], 2*p.tolerance, null);
+      if(L<=p.trou || colle) sur.fill(1, i, j);
     }
     const out=[];
     for(let i=0;i<n;){ if(!sur[i]){ i++; continue; } let j=i; while(j+1<n && sur[j+1]) j++; out.push([i,j]); i=j+1; }
     return out;
   }
 
-  // Décision enregistrée pour un contournement : même position (milieu de la portion) à 50 m près
-  function decision(h, c){
-    return (h.arbitrages||[]).find(a=>haversine(a.centre, c.centre)<=50)?.choix || null;
+  // Décision enregistrée pour un contournement : un arbitrage (de n'importe quelle randonnée publiée) dont la position
+  // tombe à moins de 50 m de la portion. Tolérant aux changements de découpage et de méthode de détection.
+  function correspond(ref, a, c){
+    if(haversine(a.centre, c.centre)<=50) return true;
+    for(let i=c.debut;i<c.fin;i+=3) if(haversine(a.centre,[ref.mLat[i],ref.mLon[i]])<=50) return true;
+    return false;
+  }
+  function decision(ref, randos, c){
+    for(const h of randos){
+      if(!h.gr34) continue;
+      const a=(h.arbitrages||[]).find(a=>correspond(ref, a, c));
+      if(a) return a.choix;
+    }
+    return null;
   }
 
   // Calcul complet. `randos` : toutes les randonnées ; seules celles avec gr34=true comptent dans le total.
@@ -230,16 +266,22 @@ const Progression = (() => {
       if(h.gr34) for(let i=0;i<ref.n;i++) union[i]|=brut[k][i];
     });
     const cov=nettoyer(ref, union, p);
-    // Contournements des randonnées publiées, avec la décision éventuelle ; « compter » ajoute la portion du GR34
-    const contours=[], segments=new Map();
-    randos.forEach((h,k)=>{
-      const acceptes=[];
-      for(const c of contournements(ref, h, p, h.gr34?cov:propres[k])){
-        c.choix=decision(h, c); contours.push(c);
-        if(c.choix==='compter'){ acceptes.push(c); propres[k].fill(1, c.debut, c.fin); if(h.gr34) cov.fill(1, c.debut, c.fin); }
+    // Contournements (portions non parcourues entre deux portions parcourues), avec la décision éventuelle ;
+    // « compter » ajoute la portion du GR34 au total et à la randonnée qui l'encadre
+    // couverture « large » (2 × la tolérance) des randonnées publiées, pour repérer les portions longées à faible distance
+    const large=couvrir(ref, randos.map(h=>h.gr34?h:{...h, pts:[]}), {...p, tolerance:2*p.tolerance});
+    const contours=contournements(ref, randos, propres, cov, large, p), acceptes=randos.map(()=>[]), segments=new Map();
+    for(const c of contours){
+      c.choix=decision(ref, randos, c);
+      if(c.choix==='compter'){
+        cov.fill(1, c.debut, c.fin); propres[c.k].fill(1, c.debut, c.fin);
+        // la trace entre les deux bords n'est colorée « sur le GR34 » que si elle a une longueur comparable (vrai détour)
+        if(c.trace_m<=3*c.gr_m+500) acceptes[c.k].push(c);
       }
+    }
+    randos.forEach((h,k)=>{
       parRando.set(h.id, +(metres(ref, propres[k])/1000).toFixed(2));
-      segments.set(h.id, segmentsSurGR34(ref, h, propres[k], acceptes, p));
+      segments.set(h.id, segmentsSurGR34(ref, h, propres[k], acceptes[k], p));
     });
     const parcouru=metres(ref, cov);
     return {
@@ -265,5 +307,5 @@ const Progression = (() => {
     return out;
   }
 
-  return {PARAMS_DEFAUT, preparer, couvrir, nettoyer, contournements, calculer, portion};
+  return {PARAMS_DEFAUT, preparer, couvrir, nettoyer, contournements, calculer, portion, correspond};
 })();

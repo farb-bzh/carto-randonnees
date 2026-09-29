@@ -42,7 +42,7 @@
         <button class="btn" id="r-defaut" type="button" style="width:100%;margin:10px 0 0">Valeurs par défaut</button>
       </details>
       <section class="contours" id="contours" hidden>
-        <h2>Contournements du GR34</h2>
+        <h2>Portions du GR34 à arbitrer</h2>
         <ol id="contours-liste"></ol>
       </section>
       <ul id="list"></ul>
@@ -110,7 +110,7 @@ function recalculer(){
   render();
 }
 
-// Contournements des randonnées publiées : vous décidez si la portion du GR34 contournée compte
+// Portions du GR34 non parcourues entre deux portions parcourues : vous décidez si elles comptent
 function afficherContours(){
   const liste=calc.contours.filter(c=>hikes.get(c.rando)?.gr34);
   $('contours').hidden=!liste.length;
@@ -119,8 +119,8 @@ function afficherContours(){
   liste.forEach(c=>{
     const h=hikes.get(c.rando), [cls,txt]=etat[c.choix];
     const li=document.createElement('li');
-    li.innerHTML=`<strong>${esc(h.name)}</strong>, km ${fmtKm(c.km_trace)} de la trace<br>`+
-      `Trace hors GR34 : ${c.trace_m} m – GR34 contourné : ${c.gr_m} m – <span class="${cls}">${txt}</span>`+
+    li.innerHTML=`<strong>${esc(h.name)}</strong>, vers le km ${fmtKm(c.km_trace)} de la trace<br>`+
+      `GR34 non parcouru : <strong>${c.gr_m} m</strong> entre deux portions parcourues – <span class="${cls}">${txt}</span>`+
       `<div class="actions"><button type="button" data-a="voir">Voir</button>`+
       `<button type="button" data-a="compter" class="${c.choix==='compter'?'on':''}">Compter la portion</button>`+
       `<button type="button" data-a="ignorer" class="${c.choix==='ignorer'?'on':''}">Ne pas compter</button></div>`;
@@ -140,11 +140,17 @@ function voirContour(c){
 }
 
 async function arbitrer(h, c, choix){
-  h.arbitrages=(h.arbitrages||[]).filter(a=>haversine(a.centre, c.centre)>50);
+  // remplace toute décision antérieure sur cette portion, quelle que soit la randonnée qui la porte
+  let ok=true;
+  for(const x of hikes.values()){
+    const avant=(x.arbitrages||[]).length;
+    x.arbitrages=(x.arbitrages||[]).filter(a=>!Progression.correspond(ref, a, c));
+    if(x!==h && x.arbitrages.length!==avant) ok=await save(x) && ok;
+  }
   h.arbitrages.push({centre:c.centre, choix});
-  const ok=await save(h);
+  ok=await save(h) && ok;
   recalculer();
-  say(ok?`Contournement ${choix==='compter'?'compté':'non compté'} (${c.gr_m} m du GR34).`:'Décision non enregistrée (stockage indisponible).', !ok);
+  say(ok?`Portion de ${c.gr_m} m ${choix==='compter'?'comptée':'non comptée'}.`:'Décision non enregistrée (stockage indisponible).', !ok);
 }
 
 // Stockage local : IndexedDB, une entrée par randonnée (clé = id)
