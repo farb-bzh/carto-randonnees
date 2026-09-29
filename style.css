@@ -41,10 +41,26 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--balise);outline
 /* Progression sur le GR34 */
 .prog{margin:0 20px 12px;padding:12px 14px;border:1px solid var(--line);border-radius:6px;background:var(--paper)}
 .prog p{margin:0}
-.prog-chiffres{font-size:.95rem}
-.prog-reste{margin-top:6px!important;font-size:.85rem;color:var(--muted)}
-.prog-barre{height:8px;margin-top:8px;border-radius:4px;background:var(--line);overflow:hidden}
-.prog-barre span{display:block;height:100%;background:var(--balise)}
+.prog-pct{font-size:2.6rem;font-weight:700;line-height:1;color:var(--balise);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.prog-sous{margin-top:4px!important;font-size:.9rem;font-weight:600}
+.prog-chiffres{margin-top:8px!important;font-size:.88rem;color:var(--muted)}
+.prog-chiffres strong{color:var(--ink)}
+.prog-barre{height:10px;margin-top:10px;border-radius:5px;background:var(--line);overflow:hidden}
+.prog-barre span{display:block;height:100%;min-width:3px;background:var(--balise)}
+
+/* Carte publique : choix d'affichage (bouton à deux positions) et liste repliable des randonnées */
+.affichage{margin:0 20px 12px;padding:0;border:0;min-width:0}
+.affichage legend{padding:0;margin-bottom:6px;font-size:.85rem;font-weight:600}
+.affichage label{display:inline-block;cursor:pointer}
+.affichage input{position:absolute;opacity:0;width:1px;height:1px}
+.affichage span{display:inline-block;padding:7px 12px;border:1px solid var(--ink);font-size:.85rem;background:var(--white)}
+.affichage label:first-of-type span{border-radius:6px 0 0 6px}
+.affichage label:last-of-type span{border-radius:0 6px 6px 0;border-left:0}
+.affichage input:checked + span{background:var(--ink);color:var(--white)}
+.affichage input:focus-visible + span{outline:3px solid var(--balise);outline-offset:2px}
+.randos{margin:0 0 12px;border-top:1px solid var(--line)}
+.randos summary{cursor:pointer;padding:12px 20px;font-weight:600;font-size:.95rem}
+.randos[open] summary{border-bottom:1px solid var(--line)}
 .legende{margin:0 20px 12px;display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font-size:.8rem;color:var(--muted)}
 .legende span{display:flex;align-items:center;gap:6px}
 .legende i{display:inline-block;width:18px;height:4px;border-radius:2px;flex:none}

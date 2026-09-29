@@ -42,21 +42,28 @@ function morceauxColores(h, surGR34){
   if(fin<h.pts.length-1) out.push([h.pts.slice(fin), COULEUR_HORS_GR34]);
   return out.filter(([pts])=>pts.length>1);
 }
-function dessinerTrace(map, h, onClick, surGR34){
-  const g=L.layerGroup([L.polyline(h.pts,{color:'#FFFFFF',weight:7,opacity:.95})]);
+// `horsGR34Seulement` (carte publique) : les portions sur le GR34 ne sont pas dessinées, le GR34 parcouru
+// (une seule ligne, quel que soit le nombre de passages) les remplace.
+function dessinerTrace(map, h, onClick, surGR34, horsGR34Seulement){
+  let morceaux=morceauxColores(h, surGR34);
+  if(horsGR34Seulement && Array.isArray(surGR34)) morceaux=morceaux.filter(([,c])=>c!==COULEUR_GR34);
+  const g=L.layerGroup();
   const popup=()=>`<strong>${esc(h.name)}</strong><br>${fmtDate(h.date)}${h.km?' – '+fmtKm(h.km)+' km':''}`;
-  for(const [pts,color] of morceauxColores(h, surGR34)) g.addLayer(L.polyline(pts,{color,weight:3.5}).bindPopup(popup));
+  for(const [pts] of morceaux) g.addLayer(L.polyline(pts,{color:'#FFFFFF',weight:7,opacity:.95}));   // liserés d'abord
+  for(const [pts,color] of morceaux) g.addLayer(L.polyline(pts,{color,weight:3.5,trait:true}).bindPopup(popup));
   g.eachLayer(l=>l.on('click',()=>onClick(h.id)));
   return g.addTo(map);
 }
 // Épaisseur des traits colorés (mise en évidence de la randonnée sélectionnée)
-function epaisseurTrace(g, w){ g.getLayers().slice(1).forEach(l=>l.setStyle({weight:w})); }
+function epaisseurTrace(g, w){ g.eachLayer(l=>{ if(l.options.trait) l.setStyle({weight:w}); }); }
 
-function htmlLegende(){
+// Légende ; `publique` : la carte publique ne dessine pas les traces sur le GR34 (le GR34 parcouru les remplace).
+// `avecTraces` (carte publique) : les traces hors GR34 sont-elles affichées ?
+function htmlLegende(publique, avecTraces=true){
   return `<div class="legende">
-    <span><i style="background:${COULEUR_GR34}"></i>Mes traces sur le GR34</span>
-    <span><i style="background:${COULEUR_HORS_GR34}"></i>Mes traces hors GR34</span>
-    <span><i style="background:${COULEUR_GR34};opacity:.45"></i>GR34 parcouru</span>
+    ${publique?'':`<span><i style="background:${COULEUR_GR34}"></i>Mes traces sur le GR34</span>`}
+    ${avecTraces?`<span><i style="background:${COULEUR_HORS_GR34}"></i>Mes traces hors GR34</span>`:''}
+    <span><i style="background:${COULEUR_GR34};opacity:${publique?1:.45}"></i>GR34 parcouru</span>
     <span><i style="background:${COULEUR_TRACE_GR34}"></i>GR34 restant</span>
   </div>`;
 }
@@ -76,12 +83,15 @@ async function afficherGR34(map, url){
   return layer;
 }
 
-// Portions du GR34 parcourues : rouge atténué, au-dessus du tracé bleu mais sous les traces
-function afficherParcouru(map, resume, ancienne){
+// Portions du GR34 parcourues, au-dessus du tracé bleu mais sous les traces.
+// Admin : rouge atténué (les traces restent visibles par-dessus). Carte publique (`plein`) : balisage GR, liseré blanc + rouge.
+function afficherParcouru(map, resume, ancienne, plein){
   if(ancienne) map.removeLayer(ancienne);
   if(!resume?.parcouru?.coordinates?.length) return null;
   if(!map.getPane('parcouru')) map.createPane('parcouru').style.zIndex=360;   // gr34 = 350, traces = 400
-  return L.geoJSON(resume.parcouru,{pane:'parcouru', interactive:false, style:{color:COULEUR_GR34, weight:6, opacity:.45}}).addTo(map);
+  const couche=style=>L.geoJSON(resume.parcouru,{pane:'parcouru', interactive:false, style});
+  if(!plein) return couche({color:COULEUR_GR34, weight:6, opacity:.45}).addTo(map);
+  return L.layerGroup([couche({color:'#FFFFFF', weight:7, opacity:.95}), couche({color:COULEUR_GR34, weight:3.5, opacity:1})]).addTo(map);
 }
 
 // Bloc de synthèse : km parcourus / total, pourcentage, barre, détail par tronçon
@@ -91,10 +101,10 @@ function htmlProgression(resume){
   const secs=resume.sections.filter(s=>s.parcouru_km>0).map(s=>
     `<li><span class="n">${esc(s.nom.replace('Chemin des Douaniers, ',''))}</span><span class="d">${fmtKm(s.parcouru_km)} / ${fmtKm(s.total_km)} km</span></li>`).join('');
   return `<div class="prog">
-    <p class="prog-chiffres"><strong>${fmtKm(resume.parcouru_km)} km</strong> parcourus sur ${fmtKm(resume.total_km)} km
-      – ${pct.toLocaleString('fr-FR',{maximumFractionDigits:1})} %</p>
+    <p class="prog-pct">${pct.toLocaleString('fr-FR',{minimumFractionDigits:1,maximumFractionDigits:1})} %</p>
+    <p class="prog-sous">du GR34 parcouru</p>
     <div class="prog-barre" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span style="width:${Math.min(100,pct)}%"></span></div>
-    <p class="prog-reste">Reste ${fmtKm(reste)} km</p>
+    <p class="prog-chiffres"><strong>${fmtKm(resume.parcouru_km)} km</strong> sur ${fmtKm(resume.total_km)} km · reste ${fmtKm(reste)} km</p>
     ${secs?`<details><summary>Détail par tronçon</summary><ul class="prog-secs">${secs}</ul></details>`:''}
   </div>`;
 }

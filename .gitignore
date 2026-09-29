@@ -1,1 +1,3 @@
 .claude/
+# Sauvegardes en clair de l’admin : ne jamais publier
+randonnees-*.geojson

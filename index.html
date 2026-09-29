@@ -21,7 +21,16 @@
     <p class="msg" id="msg" role="status"></p>
     <div class="defil">
       <div id="prog"></div>
-      <ul id="list"></ul>
+      <fieldset class="affichage" id="affichage" hidden>
+        <legend>Afficher sur la carte</legend>
+        <label><input type="radio" name="affichage" value="gr34" checked><span>GR34 parcouru</span></label>
+        <label><input type="radio" name="affichage" value="toutes"><span>Toutes mes traces</span></label>
+      </fieldset>
+      <div id="legende"></div>
+      <details class="randos" id="randos" hidden>
+        <summary id="randos-titre">Mes randonnées</summary>
+        <ul id="list"></ul>
+      </details>
     </div>
   </aside>
   <div class="mapwrap">
@@ -61,11 +70,29 @@ function session(action, value){
   return null;
 }
 
+// Affichage : « gr34 » = seulement le GR34 parcouru ; « toutes » = en plus, mes traces hors GR34 (violet).
+// Choix mémorisé dans le navigateur du visiteur (simple confort, facultatif).
+const AFFICHAGE_KEY='carto-randonnees-affichage';
+let affichage='gr34', avecProgression=false;
+try{ if(localStorage.getItem(AFFICHAGE_KEY)==='toutes') affichage='toutes'; }catch(e){}
+function appliquerAffichage(){
+  // sans progression (ancien export), les traces sont la seule information : on les montre toujours
+  const traces=affichage==='toutes' || !avecProgression;
+  for(const g of layers.values()){ if(traces) g.addTo(map); else map.removeLayer(g); }
+  $('legende').innerHTML=avecProgression ? htmlLegende(true, traces) : '';
+}
+document.querySelectorAll('input[name=affichage]').forEach(r=>{
+  r.checked=r.value===affichage;
+  r.addEventListener('change', ()=>{ affichage=r.value; try{ localStorage.setItem(AFFICHAGE_KEY, affichage); }catch(e){} appliquerAffichage(); });
+});
+
 function render(){
   const list=$('list'); list.innerHTML='';
   const arr=[...hikes.values()].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   const total=arr.reduce((s,h)=>s+h.km,0);
-  $('totals').textContent = arr.length ? `${arr.length} randonnée${arr.length>1?'s':''}, ${fmtKm(total)} km` : 'Aucune randonnée publiée';
+  $('totals').textContent = arr.length ? '' : 'Aucune randonnée publiée';
+  $('randos').hidden=!arr.length;
+  $('randos-titre').textContent=`Mes randonnées (${arr.length} · ${fmtKm(total)} km)`;
   for(const h of arr){
     const li=document.createElement('li'); if(h.id===selected) li.className='sel';
     li.innerHTML=`<button class="go"><span class="n">${esc(h.name)}</span><span class="d">${fmtDate(h.date)} – ${fmtKm(h.km)} km</span></button>`;
@@ -88,10 +115,13 @@ async function unlock(password){
   let gj;
   try{ gj=await Chiffrement.decrypt(envelope, password); }
   catch(e){ if(e.code==='BAD_PASSWORD') return false; throw e; }
-  for(const h of depuisGeoJSON(gj, 'Données publiées')){ hikes.set(h.id,h); layers.set(h.id, dessinerTrace(map, h, id=>select(id,false), h.surGR34)); }
+  for(const h of depuisGeoJSON(gj, 'Données publiées')){ hikes.set(h.id,h); layers.set(h.id, dessinerTrace(map, h, id=>select(id,false), h.surGR34, true)); }
   // Progression calculée dans la page d'administration au moment de l'export (absente des exports plus anciens)
-  afficherParcouru(map, gj.progression);
-  $('prog').innerHTML=htmlProgression(gj.progression)+htmlLegende();
+  avecProgression=!!gj.progression?.parcouru;
+  afficherParcouru(map, gj.progression, null, true);
+  $('prog').innerHTML=htmlProgression(gj.progression);
+  $('affichage').hidden=!avecProgression;
+  appliquerAffichage();
   $('lock').hidden=true;
   render(); cadrer(map,[...hikes.values()]);
   return true;
