@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="style.css">
 <script src="commun.js"></script>
 <script src="chiffrement.js"></script>
+<script src="progression.js"></script>
 </head>
 <body>
 <div class="app">
@@ -26,7 +27,26 @@
     <button class="btn primary" id="publish" type="button">Exporter pour publication (chiffré)</button>
     <button class="btn" id="export" type="button">Exporter la sauvegarde (GeoJSON)</button>
     <p class="msg" id="msg" role="status"></p>
-    <ul id="list"></ul>
+    <div class="defil">
+      <div id="prog"></div>
+      <details class="reglages" id="reglages">
+        <summary>Réglages du calcul</summary>
+        <label>Tolérance GPS <output id="v-tolerance"></output>
+          <input type="range" id="r-tolerance" min="10" max="100" step="5"></label>
+        <label>Trous comblés automatiquement jusqu'à <output id="v-trou"></output>
+          <input type="range" id="r-trou" min="0" max="500" step="10"></label>
+        <label>Portion minimale comptée <output id="v-minimum"></output>
+          <input type="range" id="r-minimum" min="0" max="1000" step="50"></label>
+        <label>Écart d'angle maximal <output id="v-angle"></output>
+          <input type="range" id="r-angle" min="15" max="90" step="5"></label>
+        <button class="btn" id="r-defaut" type="button" style="width:100%;margin:10px 0 0">Valeurs par défaut</button>
+      </details>
+      <section class="contours" id="contours" hidden>
+        <h2>Contournements du GR34</h2>
+        <ol id="contours-liste"></ol>
+      </section>
+      <ul id="list"></ul>
+    </div>
   </aside>
   <div class="mapwrap">
     <div id="map"></div>
@@ -54,10 +74,77 @@
 
 <script>
 const map = creerCarte();
-const hikes = new Map();   // id -> {id,name,date,km,type,gr34,pts}
-afficherGR34(map, 'data/gr34.geojson').then(l=>{ if(l && !hikes.size) map.fitBounds(l.getBounds()); });
+const hikes = new Map();   // id -> {id,name,date,km,type,gr34,arbitrages,pts}
 const layers = new Map();  // id -> L.layerGroup
 let selected = null;
+
+// Progression : tracé découpé (ref), dernier calcul (calc), couches « parcouru » et « contournement affiché »
+let ref=null, calc=null, coucheParcouru=null, coucheContour=null;
+const gr34Pret=afficherGR34(map, 'data/gr34.geojson').then(l=>{
+  if(!l) return;
+  if(!hikes.size) map.fitBounds(l.getBounds());
+  ref=Progression.preparer(l.donnees);
+});
+
+// Réglages du calcul, mémorisés dans ce navigateur (simple confort, facultatif)
+const REGLAGES_KEY='carto-randonnees-reglages', UNITES={tolerance:' m', trou:' m', minimum:' m', angle:'°'};
+let params={...Progression.PARAMS_DEFAUT};
+try{ Object.assign(params, JSON.parse(localStorage.getItem(REGLAGES_KEY)||'{}')); }catch(e){}
+function afficherReglages(){ for(const k in UNITES){ $('r-'+k).value=params[k]; $('v-'+k).textContent=params[k]+UNITES[k]; } }
+let minuterie=null;
+for(const k in UNITES) $('r-'+k).addEventListener('input', e=>{
+  params[k]=+e.target.value; $('v-'+k).textContent=params[k]+UNITES[k];
+  try{ localStorage.setItem(REGLAGES_KEY, JSON.stringify(params)); }catch(err){}
+  clearTimeout(minuterie); minuterie=setTimeout(recalculer, 250);
+});
+$('r-defaut').addEventListener('click', ()=>{ params={...Progression.PARAMS_DEFAUT}; try{ localStorage.removeItem(REGLAGES_KEY); }catch(e){} afficherReglages(); recalculer(); });
+afficherReglages();
+
+function recalculer(){
+  if(!ref) return;
+  calc=Progression.calculer(ref, [...hikes.values()], params);
+  coucheParcouru=afficherParcouru(map, calc.resume, coucheParcouru);
+  for(const h of hikes.values()) redraw(h);   // couleurs sur / hors GR34 recalculées
+  $('prog').innerHTML=htmlProgression(calc.resume)+htmlLegende();
+  afficherContours();
+  render();
+}
+
+// Contournements des randonnées publiées : vous décidez si la portion du GR34 contournée compte
+function afficherContours(){
+  const liste=calc.contours.filter(c=>hikes.get(c.rando)?.gr34);
+  $('contours').hidden=!liste.length;
+  const etat={compter:['etat-compter','compté'], ignorer:['etat-ignorer','non compté'], null:['etat-attente','à arbitrer (non compté)']};
+  $('contours-liste').innerHTML='';
+  liste.forEach(c=>{
+    const h=hikes.get(c.rando), [cls,txt]=etat[c.choix];
+    const li=document.createElement('li');
+    li.innerHTML=`<strong>${esc(h.name)}</strong>, km ${fmtKm(c.km_trace)} de la trace<br>`+
+      `Trace hors GR34 : ${c.trace_m} m – GR34 contourné : ${c.gr_m} m – <span class="${cls}">${txt}</span>`+
+      `<div class="actions"><button type="button" data-a="voir">Voir</button>`+
+      `<button type="button" data-a="compter" class="${c.choix==='compter'?'on':''}">Compter la portion</button>`+
+      `<button type="button" data-a="ignorer" class="${c.choix==='ignorer'?'on':''}">Ne pas compter</button></div>`;
+    li.querySelector('[data-a=voir]').onclick=()=>voirContour(c);
+    li.querySelector('[data-a=compter]').onclick=()=>arbitrer(h, c, 'compter');
+    li.querySelector('[data-a=ignorer]').onclick=()=>arbitrer(h, c, 'ignorer');
+    $('contours-liste').appendChild(li);
+  });
+}
+
+function voirContour(c){
+  if(coucheContour) map.removeLayer(coucheContour);
+  const pts=Progression.portion(ref, c.debut, c.fin);
+  coucheContour=L.polyline(pts,{color:'#E67E22', weight:7, opacity:.9, dashArray:'8 6'}).addTo(map);
+  map.fitBounds(coucheContour.getBounds(),{padding:[60,60], maxZoom:17});
+}
+
+async function arbitrer(h, c, choix){
+  h.arbitrages=(h.arbitrages||[]).filter(a=>haversine(a.centre, c.centre)>50);
+  h.arbitrages.push({centre:c.centre, choix});
+  const ok=await save(h);
+  recalculer();
+  say(ok?`Contournement ${choix==='compter'?'compté':'non compté'} (${c.gr_m} m du GR34).`:'Décision non enregistrée (stockage indisponible).', !ok);
+}
 
 // Stockage local : IndexedDB, une entrée par randonnée (clé = id)
 const DB_NAME='carte-randonnees', DB_STORE='hikes';
@@ -148,7 +235,11 @@ function parseTrack(text, fname){
   return {id:makeId(date,rounded[0]), name:(name||fname.replace(/\.(gpx|tcx)(\.gz)?$/i,'')).trim(), date:date||null, type:type||null, km:+(dist/1000).toFixed(1), gr34:false, pts:rounded};
 }
 
-function draw(h){ layers.set(h.id, dessinerTrace(map, h, id=>select(id,false))); }
+function draw(h){
+  const g=dessinerTrace(map, h, id=>select(id,false), calc?.segments.get(h.id));
+  if(h.id===selected) epaisseurTrace(g, 5.5);
+  layers.set(h.id, g);
+}
 function redraw(h){ map.removeLayer(layers.get(h.id)); draw(h); }
 const gr34List=()=>[...hikes.values()].filter(h=>h.gr34);
 
@@ -163,7 +254,9 @@ function render(){
   if(!arr.length){ list.innerHTML='<li class="empty">Exportez une activité depuis strava.com (menu « … » puis « Export GPX »), puis ajoutez le fichier ici.</li>'; return; }
   for(const h of arr){
     const li=document.createElement('li'); if(h.id===selected) li.className='sel';
-    li.innerHTML=`<button class="go"><span class="n">${esc(h.name)}</span><span class="d">${fmtDate(h.date)} – ${fmtKm(h.km)} km</span></button>`+
+    const surGr=calc?.parRando.get(h.id);
+    li.innerHTML=`<button class="go"><span class="n">${esc(h.name)}</span><span class="d">${fmtDate(h.date)} – ${fmtKm(h.km)} km`+
+      `${surGr!=null?` · ${fmtKm(surGr)} km sur le GR34`:''}</span></button>`+
       `<label class="gr" title="Publier sur la carte partagée"><input type="checkbox" ${h.gr34?'checked':''}>GR34</label>`+
       `<button class="del" aria-label="Retirer ${esc(h.name)}">Retirer</button>`;
     li.querySelector('.go').onclick=()=>select(h.id,true);
@@ -176,12 +269,12 @@ function render(){
 async function toggleGr34(id, on){
   const h=hikes.get(id); h.gr34=on; redraw(h);
   const ok=await save(h);
-  render(); say(ok?(on?`« ${h.name} » sera publiée.`:`« ${h.name} » ne sera pas publiée.`):'Changement non enregistré (stockage indisponible).', !ok);
+  recalculer(); render(); say(ok?(on?`« ${h.name} » sera publiée.`:`« ${h.name} » ne sera pas publiée.`):'Changement non enregistré (stockage indisponible).', !ok);
 }
 
 function select(id, zoom){
   selected=id;
-  for(const [k,g] of layers){ const c=g.getLayers()[1]; c.setStyle({weight:k===id?5.5:3.5}); if(k===id) g.eachLayer(l=>l.bringToFront()); }
+  for(const [k,g] of layers){ epaisseurTrace(g, k===id?5.5:3.5); if(k===id) g.eachLayer(l=>l.bringToFront()); }
   if(zoom) map.fitBounds(L.polyline(hikes.get(id).pts).getBounds(),{padding:[30,30]});
   render();
 }
@@ -196,7 +289,7 @@ async function remove(id){
   hikes.delete(id); map.removeLayer(layers.get(id)); layers.delete(id);
   if(selected===id) selected=null;
   try{ await store.del(id); }catch(e){ console.error(e); }
-  render(); say('Trace retirée.');
+  recalculer(); render(); say('Trace retirée.');
 }
 
 function download(blob, name){
@@ -210,18 +303,26 @@ $('file').addEventListener('change', async e=>{
   const files=[...e.target.files]; e.target.value='';
   if(!files.length) return;
   say(`Lecture de ${files.length} fichier${files.length>1?'s':''}…`);
-  let added=0, dup=0, unsaved=0; const errors=[];
+  let added=0, dup=0, unsaved=0; const errors=[], nouvellesTraces=[];
   for(const f of files){
     try{
+      const estSauvegarde=/\.(geo)?json(\.gz)?$/i.test(f.name);
       for(const h of await parse(f)){
         if(hikes.has(h.id)){ dup++; continue; }
         hikes.set(h.id,h); draw(h); added++;
+        if(!estSauvegarde) nouvellesTraces.push(h);
         if(!(await save(h))) unsaved++;
       }
     }catch(err){ errors.push(err.message); }
   }
+  // Nouvelles traces GPX/TCX : cochées « GR34 » d'office si elles en parcourent au moins 1 km (vous pouvez décocher)
+  await gr34Pret; recalculer();
+  const cochees=nouvellesTraces.filter(h=>(calc?.parRando.get(h.id)||0)>=1);
+  for(const h of cochees){ h.gr34=true; redraw(h); if(!(await save(h))) unsaved++; }
+  if(cochees.length) recalculer();
   render(); if(added) cadrer(map,[...hikes.values()]);
   let t=`${added} trace${added>1?'s':''} ajoutée${added>1?'s':''}.`;
+  if(cochees.length) t+=` ${cochees.length} cochée${cochees.length>1?'s':''} « GR34 » automatiquement (au moins 1 km sur le GR34).`;
   if(dup) t+=` ${dup} déjà présente${dup>1?'s':''}.`;
   if(unsaved) t+=` ${unsaved} non conservée${unsaved>1?'s':''} pour la prochaine ouverture (stockage indisponible).`;
   if(errors.length) t+=' '+errors.join(' ');
@@ -251,7 +352,8 @@ $('pubform').addEventListener('submit', async e=>{
   $('pubok').disabled=true; $('puberr').textContent='Chiffrement en cours…';
   try{
     const list=gr34List();
-    const env=await Chiffrement.encrypt(versGeoJSON(list), p1);
+    recalculer();
+    const env=await Chiffrement.encrypt(versGeoJSON(list, calc?.resume, calc?.segments), p1);
     download(new Blob([JSON.stringify(env)],{type:'application/json'}), 'randonnees.enc.json');
     $('pubdlg').close();
     say(`Fichier chiffré exporté (${list.length} randonnée${list.length>1?'s':''}). Copiez-le dans data/, puis commit et push.`);
@@ -266,6 +368,7 @@ $('pubform').addEventListener('submit', async e=>{
   // Demande de stockage persistant (le navigateur peut refuser)
   if(navigator.storage?.persist){ try{ await navigator.storage.persist(); }catch(e){} }
   render(); cadrer(map,[...hikes.values()]);
+  await gr34Pret; recalculer();
 })();
 </script>
 </body>

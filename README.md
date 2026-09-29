@@ -10,6 +10,7 @@ HTML statique (Leaflet + tuiles OpenStreetMap), hébergé sur GitHub Pages.
 | `index.html` | Carte publique en lecture seule : demande le mot de passe, déchiffre `data/randonnees.enc.json` |
 | `admin.html` | Administration : import des GPX/TCX (éventuellement `.gz`), stockage dans le navigateur (IndexedDB), choix des randonnées « GR34 », export chiffré |
 | `commun.js` | Code partagé : carte, dessin des traces, format GeoJSON |
+| `progression.js` | Calcul des portions du GR34 parcourues (utilisé par `admin.html`) |
 | `chiffrement.js` | Chiffrement Web Crypto : PBKDF2-SHA256 (600 000 itérations) puis AES-GCM 256, contenu compressé en gzip |
 | `data/randonnees.enc.json` | Randonnées publiées, chiffrées |
 | `data/gr34.geojson` | Tracé de référence du GR34, en clair (données ouvertes OSM) |
@@ -28,6 +29,23 @@ Pour mettre à jour : ouvrir `outils/extraire-gr34.html` (servi en HTTP), « Té
 
 Les traces en clair ne sont jamais dans ce dépôt. Le navigateur peut effacer le stockage local :
 garder une sauvegarde GeoJSON (bouton « Exporter la sauvegarde » de `admin.html`) hors du dépôt.
+
+## Calcul de la progression
+
+Calculé dans `admin.html` sur les randonnées cochées « GR34 », puis inclus dans le fichier chiffré au moment de l'export.
+Seul le tracé principal compte (pas les variantes).
+
+1. Le tracé principal est découpé en morceaux d'au plus 10 m.
+2. Un morceau est parcouru si une trace passe à moins de la **tolérance** (40 m par défaut) de son milieu, dans une
+   direction proche (écart d'angle ≤ 45°). Au-delà du départ et de l'arrivée d'une trace, rien n'est compté.
+3. Les **trous** de moins de 100 m entre deux portions parcourues sont comblés ; les portions de moins de 200 m
+   sont retirées (croisements, frôlements). Un morceau parcouru plusieurs fois ne compte qu'une fois.
+4. **Contournements** : quand une trace quitte le GR34 puis le rejoint plus loin (balisage modifié, sentier parallèle),
+   la portion du GR34 contournée est listée dans l'admin. Elle ne compte que si vous choisissez « Compter la portion ».
+   La décision est enregistrée avec la randonnée (navigateur et sauvegarde GeoJSON).
+
+Les réglages se modifient dans « Réglages du calcul » (mémorisés dans le navigateur).
+Limite connue : un chemin parallèle à moins de la tolérance du GR34 est compté comme le GR34.
 
 ## Mettre à jour la carte
 

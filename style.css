@@ -34,6 +34,43 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--balise);outline
 .banner{position:absolute;z-index:1000;top:10px;left:50%;transform:translateX(-50%);background:var(--white);border:1px solid var(--line);padding:8px 12px;border-radius:6px;font-size:.85rem;display:none;max-width:90%}
 .mapwrap{position:relative;height:100%}
 
+/* Zone défilante de la barre latérale (progression, réglages, listes) */
+.defil{flex:1;min-height:0;overflow-y:auto;border-top:1px solid var(--line);padding-top:12px}
+.defil #list{overflow:visible;flex:none}
+
+/* Progression sur le GR34 */
+.prog{margin:0 20px 12px;padding:12px 14px;border:1px solid var(--line);border-radius:6px;background:var(--paper)}
+.prog p{margin:0}
+.prog-chiffres{font-size:.95rem}
+.prog-reste{margin-top:6px!important;font-size:.85rem;color:var(--muted)}
+.prog-barre{height:8px;margin-top:8px;border-radius:4px;background:var(--line);overflow:hidden}
+.prog-barre span{display:block;height:100%;background:var(--balise)}
+.legende{margin:0 20px 12px;display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font-size:.8rem;color:var(--muted)}
+.legende span{display:flex;align-items:center;gap:6px}
+.legende i{display:inline-block;width:18px;height:4px;border-radius:2px;flex:none}
+.prog details{margin-top:8px;font-size:.85rem}
+.prog summary{cursor:pointer;color:var(--muted)}
+.prog-secs{border-top:0;max-height:none;overflow:visible}
+.prog-secs li{display:block;padding:6px 0;border-bottom:1px solid var(--line)}
+.prog-secs li:last-child{border-bottom:0}
+
+/* Admin : réglages et contournements à arbitrer */
+.reglages{margin:0 20px 12px;font-size:.85rem}
+.reglages summary{cursor:pointer;font-weight:600}
+.reglages label{display:grid;grid-template-columns:1fr auto;gap:2px 8px;margin-top:10px}
+.reglages input[type=range]{grid-column:1 / -1;width:100%}
+.reglages output{font-variant-numeric:tabular-nums;color:var(--muted)}
+.contours{margin:0 20px 12px}
+.contours h2{font-size:.95rem;margin:0 0 6px}
+.contours ol{margin:0;padding:0;list-style:none}
+.contours li{display:block;padding:8px 0;border-bottom:1px solid var(--line);font-size:.85rem}
+.contours .actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.contours .actions button{background:var(--white);border:1px solid var(--line);border-radius:4px;padding:4px 8px;font:inherit;font-size:.8rem;cursor:pointer}
+.contours .actions button.on{border-color:var(--ink);background:var(--ink);color:var(--white)}
+.etat-compter{color:#1E8449;font-weight:600}
+.etat-ignorer{color:var(--muted);font-weight:600}
+.etat-attente{color:#B9770E;font-weight:600}
+
 /* Formulaires de mot de passe : fenêtre d'export (admin) et écran de déverrouillage (public) */
 dialog,.lock form{border:1px solid var(--line);border-radius:8px;padding:22px;max-width:380px;width:calc(100% - 32px);background:var(--white);color:var(--ink)}
 dialog::backdrop{background:rgba(28,43,42,.45)}

@@ -19,7 +19,10 @@
       <p class="totals" id="totals">Carte verrouillée</p>
     </header>
     <p class="msg" id="msg" role="status"></p>
-    <ul id="list"></ul>
+    <div class="defil">
+      <div id="prog"></div>
+      <ul id="list"></ul>
+    </div>
   </aside>
   <div class="mapwrap">
     <div id="map"></div>
@@ -73,7 +76,7 @@ function render(){
 
 function select(id, zoom){
   selected=id;
-  for(const [k,g] of layers){ const c=g.getLayers()[1]; c.setStyle({weight:k===id?5.5:3.5}); if(k===id) g.eachLayer(l=>l.bringToFront()); }
+  for(const [k,g] of layers){ epaisseurTrace(g, k===id?5.5:3.5); if(k===id) g.eachLayer(l=>l.bringToFront()); }
   if(zoom) map.fitBounds(L.polyline(hikes.get(id).pts).getBounds(),{padding:[30,30]});
   render();
 }
@@ -85,7 +88,10 @@ async function unlock(password){
   let gj;
   try{ gj=await Chiffrement.decrypt(envelope, password); }
   catch(e){ if(e.code==='BAD_PASSWORD') return false; throw e; }
-  for(const h of depuisGeoJSON(gj, 'Données publiées')){ hikes.set(h.id,h); layers.set(h.id, dessinerTrace(map, h, id=>select(id,false))); }
+  for(const h of depuisGeoJSON(gj, 'Données publiées')){ hikes.set(h.id,h); layers.set(h.id, dessinerTrace(map, h, id=>select(id,false), h.surGR34)); }
+  // Progression calculée dans la page d'administration au moment de l'export (absente des exports plus anciens)
+  afficherParcouru(map, gj.progression);
+  $('prog').innerHTML=htmlProgression(gj.progression)+htmlLegende();
   $('lock').hidden=true;
   render(); cadrer(map,[...hikes.values()]);
   return true;

@@ -85,7 +85,7 @@ function construire(osm){
 
 function afficher(gj){
   if(preview) map.removeLayer(preview);
-  preview=L.geoJSON(gj,{style:f=>({color:'#1F4E79',weight:3,dashArray:f.properties.role==='variante'?'6 6':null})}).addTo(map);
+  preview=L.geoJSON(gj,{style:f=>({color:COULEUR_TRACE_GR34,weight:3,dashArray:f.properties.role==='variante'?'6 6':null})}).addTo(map);
   map.fitBounds(preview.getBounds());
   const sum=r=>gj.features.filter(f=>f.properties.role===r).reduce((s,f)=>s+f.properties.km,0);
   const nPts=gj.features.reduce((s,f)=>s+f.geometry.coordinates.reduce((t,l)=>t+l.length,0),0);
