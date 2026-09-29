@@ -4,11 +4,11 @@
 //  1. Le tracé principal est découpé en « morceaux » d'au plus 10 m.
 //  2. Un morceau est couvert par une randonnée si un segment de la trace passe à moins de `tolerance` mètres
 //     de son milieu, dans une direction proche (écart d'angle ≤ `angle` degrés, sens de marche indifférent).
-//  3. Nettoyage, ligne par ligne : on comble les trous de moins de `trou` mètres entre deux portions couvertes,
-//     puis on retire les portions couvertes de moins de `minimum` mètres (croisements, frôlements).
-// Un morceau couvert plusieurs fois ne compte qu'une fois.
-//  4. Contournements : la trace quitte le GR34 en A et le rejoint en B sur la même ligne. La portion A–B
-//     n'est comptée que si l'utilisateur l'a décidé (arbitrage « compter »), repéré par la position de son milieu.
+//  3. Nettoyage, sur le réseau (les tronçons OSM sont reliés à leurs jonctions) : on comble les trous de moins de
+//     `trou` mètres entre deux portions couvertes, puis on retire les portions couvertes de moins de `minimum` mètres
+//     (croisements, frôlements). Un morceau couvert plusieurs fois ne compte qu'une fois.
+//  4. Portions à arbitrer : non parcourues mais encadrées par du parcouru, ou longées à faible distance par une trace.
+//     Elles ne comptent que si l'utilisateur l'a décidé (arbitrage « compter »), repéré par position.
 const Progression = (() => {
   const PAS = 10, R = 6371000, D2R = Math.PI / 180, CELLULE = 0.002;   // cellule d'index ≈ 220 m × 150 m
   const PARAMS_DEFAUT = {tolerance:40, trou:100, minimum:200, angle:45};
@@ -40,10 +40,60 @@ const Progression = (() => {
       }
     }
     const F=a=>Float64Array.from(a);
-    return {n:len.length, sLat:F(sLat), sLon:F(sLon), eLat:F(eLat), eLon:F(eLon), mLat:F(mLat), mLon:F(mLon),
+    const ref={n:len.length, sLat:F(sLat), sLon:F(sLon), eLat:F(eLat), eLon:F(eLon), mLat:F(mLat), mLon:F(mLon),
       len:F(len), dir:F(dir), sommet:Uint8Array.from(sommet), sec:Uint16Array.from(sec), lignes, sections,
       totalM:len.reduce((s,x)=>s+x,0), osm_base:gj.osm_base||null};
+    relier(ref);
+    return ref;
   }
+
+  // Le tracé est un réseau : les lignes OSM (tronçons) se raccordent à leurs extrémités, parfois au milieu d'une
+  // autre ligne. `ref.lig[i]` = ligne du morceau i ; `ref.liens` : morceau d'extrémité -> morceaux raccordés (≤ 15 m).
+  const JONCTION=15;
+  function relier(ref){
+    const lig=new Uint16Array(ref.n); ref.lignes.forEach(([a,b],l)=>lig.fill(l,a,b)); ref.lig=lig;
+    const liens=new Map(), lier=(x,y)=>{ if(x===y) return; for(const [u,v] of [[x,y],[y,x]]){ const l=liens.get(u)||liens.set(u,[]).get(u); if(!l.includes(v)) l.push(v); } };
+    const {g, cle}=indexMorceaux(ref);
+    ref.lignes.forEach(([a,b])=>{
+      for(const [e,la,lo] of [[a,ref.sLat[a],ref.sLon[a]], [b-1,ref.eLat[b-1],ref.eLon[b-1]]]){
+        const cy=Math.floor(la/CELLULE), cx=Math.floor(lo/CELLULE);
+        for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) for(const q of g.get(cle(cy+dy,cx+dx))||[]){
+          if(q===e || (lig[q]===lig[e] && Math.abs(q-e)===1)) continue;
+          if(haversine([la,lo],[ref.sLat[q],ref.sLon[q]])<=JONCTION || haversine([la,lo],[ref.eLat[q],ref.eLon[q]])<=JONCTION) lier(e,q);
+        }
+      }
+    });
+    ref.liens=liens;
+  }
+  function voisins(ref, i){
+    const [a,b]=ref.lignes[ref.lig[i]], out=[];
+    if(i>a) out.push(i-1); if(i<b-1) out.push(i+1);
+    const l=ref.liens.get(i); if(l) out.push(...l);
+    return out;
+  }
+  // Ensemble connexe de morceaux vérifiant `pred`, à partir de `depart` ; null si sa longueur dépasse `limite`.
+  // `bords` : morceaux voisins ne vérifiant pas `pred` ; `bouts` : morceaux de l'ensemble touchant un bord.
+  function explorer(ref, depart, pred, limite){
+    const vu=new Set([depart]), pile=[depart], morceaux=[], bords=new Set(), bouts=[];
+    let L=0;
+    while(pile.length){
+      const i=pile.pop(); morceaux.push(i); L+=ref.len[i]; if(L>limite) return null;
+      let bout=false;
+      for(const v of voisins(ref, i)){
+        if(vu.has(v)) continue;
+        if(pred(v)){ vu.add(v); pile.push(v); } else { bords.add(v); bout=true; }
+      }
+      if(bout) bouts.push(i);
+    }
+    return {morceaux, L, bords:[...bords], bouts, vu};
+  }
+  // Morceaux triés -> plages [début, fin[ consécutives
+  function plages(morceaux){
+    const m=[...morceaux].sort((a,b)=>a-b), out=[];
+    for(const i of m){ const d=out[out.length-1]; if(d && d[1]===i) d[1]=i+1; else out.push([i,i+1]); }
+    return out;
+  }
+  const remplir=(cov, pl, v)=>{ for(const [a,b] of pl) cov.fill(v,a,b); };
 
   // Index spatial des segments des randonnées : cellule -> liste [indexRando, lat1, lon1, lat2, lon2, extrémités]
   // extrémités : 1 = premier segment de la trace, 2 = dernier (pour ne pas couvrir au-delà du départ et de l'arrivée)
@@ -95,26 +145,35 @@ const Progression = (() => {
     return cov;
   }
 
-  // Comble les trous courts puis retire les portions trop courtes, ligne par ligne
+  // Trous non couverts encadrés (au moins deux bords couverts) d'au plus `limite` m, jonctions comprises.
+  // L'exploration part des morceaux couverts et s'arrête dès que la limite est dépassée (coût borné).
+  function trousEncadres(ref, cov, limite){
+    const out=[], traite=new Uint8Array(ref.n);
+    for(let i=0;i<ref.n;i++){
+      if(!cov[i]) continue;
+      for(const v of voisins(ref, i)){
+        if(cov[v] || traite[v]) continue;
+        const t=explorer(ref, v, x=>!cov[x], limite);
+        if(!t) continue;
+        for(const x of t.morceaux) traite[x]=1;
+        if(t.bords.length>=2) out.push(t);
+      }
+    }
+    return out;
+  }
+
+  // Comble les trous courts puis retire les portions trop courtes, sur le réseau (jonctions comprises)
   function nettoyer(ref, brut, p){
     const cov=brut.slice();
-    for(const [a,b] of ref.lignes){
-      // trous : suites non couvertes encadrées par du couvert, de longueur ≤ p.trou
-      let i=a;
-      while(i<b){
-        if(cov[i]){ i++; continue; }
-        let j=i, L=0; while(j<b && !cov[j]){ L+=ref.len[j]; j++; }
-        if(i>a && j<b && L<=p.trou) cov.fill(1,i,j);
-        i=j;
-      }
-      // portions couvertes de longueur < p.minimum
-      i=a;
-      while(i<b){
-        if(!cov[i]){ i++; continue; }
-        let j=i, L=0; while(j<b && cov[j]){ L+=ref.len[j]; j++; }
-        if(L<p.minimum) cov.fill(0,i,j);
-        i=j;
-      }
+    // trous non couverts encadrés par du couvert, de longueur ≤ p.trou
+    for(const t of trousEncadres(ref, brut, p.trou)) for(const x of t.morceaux) cov[x]=1;
+    // portions couvertes de longueur < p.minimum
+    const vu=new Uint8Array(ref.n), cov0=cov.slice();
+    for(let i=0;i<ref.n;i++){
+      if(!cov0[i] || vu[i]) continue;
+      const t=explorer(ref, i, x=>cov0[x]===1, Infinity);
+      for(const x of t.morceaux) vu[x]=1;
+      if(t.L<p.minimum) for(const x of t.morceaux) cov[x]=0;
     }
     return cov;
   }
@@ -153,47 +212,42 @@ const Progression = (() => {
   const TROU_MAX=2000;   // au-delà, une portion non parcourue n'est pas proposée à l'arbitrage
 
   // Portions à arbitrer (« contournements »), de plus de `trou` m (les plus courtes sont déjà comblées) :
-  //  1. portions du GR34 NON parcourues, encadrées de part et d'autre par des portions parcourues sur une même ligne
-  //     du tracé, d'au plus TROU_MAX m (balisage modifié, sentier parallèle, passage par l'intérieur…) ;
+  //  1. portions du GR34 NON parcourues, encadrées par des portions parcourues (jonctions entre tronçons comprises),
+  //     d'au plus TROU_MAX m (balisage modifié, sentier parallèle, passage par l'intérieur…) ;
   //  2. portions NON parcourues qu'une trace longe à faible distance (`large` : couverture avec 2 × la tolérance).
   // Chaque portion est rattachée à une randonnée publiée (pour situer et colorer la trace).
   // `cov` : couverture de l'ensemble des randonnées publiées ; `propres` : couverture de chaque randonnée.
   function contournements(ref, randos, propres, cov, large, p){
     const out=[], pris=new Uint8Array(ref.n);
-    for(const [a,b] of ref.lignes){
-      for(let i=a;i<b;){
-        if(cov[i]){ i++; continue; }
-        let j=i, L=0; while(j<b && !cov[j]){ L+=ref.len[j]; j++; }
-        if(i>a && j<b && L>p.trou && L<=TROU_MAX){
-          // randonnée qui parcourt les deux bords (à défaut, l'un des deux)
-          let k=randos.findIndex((h,q)=>h.gr34 && propres[q][i-1] && propres[q][j]);
-          if(k<0) k=randos.findIndex((h,q)=>h.gr34 && (propres[q][i-1] || propres[q][j]));
-          if(k>=0){ out.push(situer(ref, randos[k], k, i, j, L)); pris.fill(1, i, j); }
-        }
-        i=j;
-      }
+    for(const t of trousEncadres(ref, cov, TROU_MAX)){
+      if(t.L<=p.trou) continue;                                   // déjà comblé automatiquement
+      // randonnée qui parcourt tous les bords (à défaut, l'un d'eux)
+      let k=randos.findIndex((h,q)=>h.gr34 && t.bords.every(b=>propres[q][b]));
+      if(k<0) k=randos.findIndex((h,q)=>h.gr34 && t.bords.some(b=>propres[q][b]));
+      if(k<0) continue;
+      out.push(situer(ref, randos[k], k, t)); for(const x of t.morceaux) pris[x]=1;
     }
     randos.forEach((h,k)=>{
       if(!h.gr34) return;
-      for(const [a,b] of ref.lignes){
-        for(let i=a;i<b;){
-          if(cov[i] || pris[i] || !large[k][i]){ i++; continue; }
-          let j=i, L=0; while(j<b && !cov[j] && !pris[j] && large[k][j]){ L+=ref.len[j]; j++; }
-          if(L>p.trou && L<=TROU_MAX){ out.push(situer(ref, h, k, i, j, L)); pris.fill(1, i, j); }
-          i=j;
-        }
+      const vu=new Uint8Array(ref.n), pred=x=>!cov[x] && !pris[x] && large[k][x]===1;
+      for(let i=0;i<ref.n;i++){
+        if(vu[i] || !pred(i)) continue;
+        const t=explorer(ref, i, pred, Infinity);
+        for(const x of t.morceaux) vu[x]=1;
+        if(t.L>p.trou && t.L<=TROU_MAX){ out.push(situer(ref, h, k, t)); for(const x of t.morceaux) pris[x]=1; }
       }
     });
     return out;
   }
 
-  // Position d'un contournement sur la trace de la randonnée : points les plus proches des deux bords
-  function situer(ref, h, k, debut, fin, L){
+  // Position d'un contournement sur la trace de la randonnée : points les plus proches de ses deux extrémités
+  function situer(ref, h, k, t){
     const pts=h.pts, proche=m=>{ let bd=Infinity, bi=0; pts.forEach((q,i)=>{ const d=haversine(q,[ref.mLat[m],ref.mLon[m]]); if(d<bd){ bd=d; bi=i; } }); return bi; };
-    let i_a=proche(debut-1), i_b=proche(fin); if(i_a>i_b) [i_a,i_b]=[i_b,i_a];
+    const bouts=t.bouts.length ? t.bouts : t.morceaux;
+    let i_a=proche(bouts[0]), i_b=proche(bouts[bouts.length-1]); if(i_a>i_b) [i_a,i_b]=[i_b,i_a];
     let avant=0, trace=0; for(let i=1;i<=i_b;i++){ const d=haversine(pts[i-1],pts[i]); if(i<=i_a) avant+=d; else trace+=d; }
-    const mil=(debut+fin)>>1;
-    return {rando:h.id, k, debut, fin, trous:[[debut,fin]], gr_m:Math.round(L), trace_m:Math.round(trace), i_a, i_b,
+    const pl=plages(t.morceaux), mil=[...t.morceaux].sort((a,b)=>a-b)[t.morceaux.length>>1];
+    return {rando:h.id, k, plages:pl, trous:pl, gr_m:Math.round(t.L), trace_m:Math.round(trace), i_a, i_b,
       km_trace:+(avant/1000).toFixed(2), centre:[+ref.mLat[mil].toFixed(5), +ref.mLon[mil].toFixed(5)]};
   }
 
@@ -244,7 +298,7 @@ const Progression = (() => {
   // tombe à moins de 50 m de la portion. Tolérant aux changements de découpage et de méthode de détection.
   function correspond(ref, a, c){
     if(haversine(a.centre, c.centre)<=50) return true;
-    for(let i=c.debut;i<c.fin;i+=3) if(haversine(a.centre,[ref.mLat[i],ref.mLon[i]])<=50) return true;
+    for(const [d,f] of c.plages) for(let i=d;i<f;i+=3) if(haversine(a.centre,[ref.mLat[i],ref.mLon[i]])<=50) return true;
     return false;
   }
   function decision(ref, randos, c){
@@ -274,7 +328,7 @@ const Progression = (() => {
     for(const c of contours){
       c.choix=decision(ref, randos, c);
       if(c.choix==='compter'){
-        cov.fill(1, c.debut, c.fin); propres[c.k].fill(1, c.debut, c.fin);
+        remplir(cov, c.plages, 1); remplir(propres[c.k], c.plages, 1);
         // la trace entre les deux bords n'est colorée « sur le GR34 » que si elle a une longueur comparable (vrai détour)
         if(c.trace_m<=3*c.gr_m+500) acceptes[c.k].push(c);
       }
