@@ -45,6 +45,7 @@
 const DATA_URL='data/randonnees.enc.json', SESSION_KEY='carto-randonnees-mdp';
 const map = creerCarte();
 const hikes = new Map(), layers = new Map();
+afficherGR34(map, 'data/gr34.geojson').then(l=>{ if(l && !hikes.size) map.fitBounds(l.getBounds()); });
 let selected = null, envelope = null;
 
 function say(t, err){ const m=$('msg'); m.textContent=t; m.className='msg'+(err?' err':''); }

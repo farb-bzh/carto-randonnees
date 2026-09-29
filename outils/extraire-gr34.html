@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Extraction du tracé GR34</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<link rel="stylesheet" href="../style.css">
+<script src="../commun.js"></script>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <header>
+      <h1><span class="mark" aria-hidden="true"></span>Tracé GR34</h1>
+      <p class="role">Outil d'extraction</p>
+      <p class="totals">Source : relation OpenStreetMap <a href="https://www.openstreetmap.org/relation/7790332">7790332</a>, licence ODbL.</p>
+    </header>
+    <button class="btn primary" id="fetch" type="button">Télécharger depuis OpenStreetMap</button>
+    <label class="add">
+      <input type="file" id="file" accept=".json">
+      <span>… ou charger une réponse Overpass (.json)</span>
+    </label>
+    <button class="btn" id="save" type="button" disabled>Enregistrer gr34.geojson</button>
+    <p class="msg" id="msg" role="status"></p>
+    <ul id="list"></ul>
+  </aside>
+  <div class="mapwrap">
+    <div id="map"></div>
+    <div class="banner" id="banner">Le fond de carte ne se charge pas ici.</div>
+  </div>
+</div>
+<script>
+// Superroute OSM du GR34 ; ses sous-relations sont les tronçons. Les noms contenant « variante » ou « liaison » sont des variantes.
+const RELATION=7790332;
+const QUERY=`[out:json][timeout:120][maxsize:268435456];relation(${RELATION});rel(r);out geom qt;`;
+const map=creerCarte();
+let result=null, preview=null;
+
+function say(t, err){ const m=$('msg'); m.textContent=t; m.className='msg'+(err?' err':''); }
+
+// Assemble les ways (qui partagent leurs nœuds d'extrémité) en lignes continues les plus longues possibles
+function fusionner(ways){
+  const k=p=>p[0]+','+p[1], lines=ways.map(w=>w.geometry.map(g=>[g.lat,g.lon]));
+  const used=new Array(lines.length).fill(false), byEnd=new Map();
+  lines.forEach((l,i)=>{ for(const e of [k(l[0]),k(l[l.length-1])]) (byEnd.get(e)||byEnd.set(e,[]).get(e)).push(i); });
+  const take=(key)=>{ for(const i of byEnd.get(key)||[]) if(!used[i]){ used[i]=true; return lines[i]; } return null; };
+  const out=[];
+  for(let i=0;i<lines.length;i++){
+    if(used[i]) continue; used[i]=true;
+    let chain=lines[i].slice();
+    for(let n; (n=take(k(chain[chain.length-1]))); ) chain=chain.concat((k(n[0])===k(chain[chain.length-1])?n:n.slice().reverse()).slice(1));
+    for(let n; (n=take(k(chain[0]))); ) chain=(k(n[n.length-1])===k(chain[0])?n:n.slice().reverse()).slice(0,-1).concat(chain);
+    out.push(chain);
+  }
+  return out;
+}
+
+const longueur=l=>{ let s=0; for(let i=1;i<l.length;i++) s+=haversine(l[i-1],l[i]); return s; };
+
+function construire(osm){
+  const rels=(osm.elements||[]).filter(e=>e.type==='relation');
+  if(!rels.length) throw new Error('Aucun tronçon dans la réponse.');
+  const features=[];
+  for(const r of rels){
+    const ways=r.members.filter(m=>m.type==='way'&&m.geometry?.length>1);
+    if(!ways.length) continue;
+    // Tracé complet, sans allègement, coordonnées telles que fournies par OSM
+    const merged=fusionner(ways);
+    const lines=merged.map(l=>l.map(([a,b])=>[b,a]));
+    const km=merged.reduce((s,l)=>s+longueur(l),0)/1000;
+    features.push({type:'Feature',
+      properties:{osm_id:r.id, name:r.tags?.name||'', role:/variante|liaison/i.test(r.tags?.name||'')?'variante':'principal', km:+km.toFixed(1)},
+      geometry:{type:'MultiLineString', coordinates:lines}});
+  }
+  features.sort((a,b)=>a.properties.role.localeCompare(b.properties.role)||a.properties.name.localeCompare(b.properties.name));
+  return {type:'FeatureCollection',
+    source:`https://www.openstreetmap.org/relation/${RELATION}`,
+    attribution:'© contributeurs OpenStreetMap, ODbL (https://www.openstreetmap.org/copyright)',
+    osm_base:osm.osm3s?.timestamp_osm_base||null,
+    features};
+}
+
+function afficher(gj){
+  if(preview) map.removeLayer(preview);
+  preview=L.geoJSON(gj,{style:f=>({color:'#1F4E79',weight:3,dashArray:f.properties.role==='variante'?'6 6':null})}).addTo(map);
+  map.fitBounds(preview.getBounds());
+  const sum=r=>gj.features.filter(f=>f.properties.role===r).reduce((s,f)=>s+f.properties.km,0);
+  const nPts=gj.features.reduce((s,f)=>s+f.geometry.coordinates.reduce((t,l)=>t+l.length,0),0);
+  const size=new Blob([JSON.stringify(gj)]).size;
+  say(`Tracé principal : ${fmtKm(sum('principal'))} km. Variantes : ${fmtKm(sum('variante'))} km. ${nPts.toLocaleString('fr-FR')} points, ${(size/1024).toLocaleString('fr-FR',{maximumFractionDigits:0})} Ko.`);
+  $('list').innerHTML=gj.features.map(f=>`<li><span><span class="n">${esc(f.properties.name.replace('Chemin des Douaniers, ',''))}</span><span class="d">${f.properties.role} – ${fmtKm(f.properties.km)} km – ${f.geometry.coordinates.length} ligne(s)</span></span></li>`).join('');
+  $('save').disabled=false;
+}
+
+function traiter(osm){
+  try{ result=construire(osm); afficher(result); }
+  catch(e){ console.error(e); say('Échec : '+e.message, true); }
+}
+
+$('fetch').addEventListener('click', async ()=>{
+  $('fetch').disabled=true; say('Interrogation d’OpenStreetMap (Overpass), cela peut prendre une minute…');
+  try{
+    const r=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',body:new URLSearchParams({data:QUERY})});
+    if(!r.ok) throw new Error('HTTP '+r.status+(r.status===429||r.status===504?' : serveur Overpass surchargé, réessayez plus tard.':''));
+    const text=await r.text();
+    if(!text.trim().startsWith('{')) throw new Error('le serveur Overpass est surchargé, réessayez dans quelques minutes.');
+    traiter(JSON.parse(text));
+  }catch(e){ console.error(e); say('Échec du téléchargement : '+e.message, true); }
+  finally{ $('fetch').disabled=false; }
+});
+
+$('file').addEventListener('change', async e=>{
+  const f=e.target.files[0]; e.target.value=''; if(!f) return;
+  try{ traiter(JSON.parse(await f.text())); }catch(err){ say(f.name+' : JSON illisible.', true); }
+});
+
+$('save').addEventListener('click', ()=>{
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([JSON.stringify(result)],{type:'application/geo+json'})); a.download='gr34.geojson';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  say('Fichier gr34.geojson enregistré : placez-le dans data/, puis commit et push.');
+});
+</script>
+</body>
+</html>

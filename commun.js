@@ -37,6 +37,19 @@ function dessinerTrace(map, h, onClick){
   return g.addTo(map);
 }
 
+// Tracé de référence du GR34 (données OSM, ODbL), dessiné sous les randonnées.
+// Tracé principal en trait continu, variantes en pointillés. Renvoie la couche, ou null si le fichier manque.
+async function afficherGR34(map, url){
+  let gj;
+  try{ const r=await fetch(url); if(!r.ok) return null; gj=await r.json(); }
+  catch(e){ console.error(e); return null; }
+  map.createPane('gr34').style.zIndex=350;   // sous les traces (overlayPane = 400)
+  map.attributionControl.addAttribution('Tracé GR34 : © <a href="https://www.openstreetmap.org/copyright">contributeurs OpenStreetMap</a>, ODbL');
+  return L.geoJSON(gj,{pane:'gr34', interactive:false,
+    style:f=>({color:'#1F4E79', weight:f.properties.role==='variante'?2:3, opacity:.75, dashArray:f.properties.role==='variante'?'5 6':null})
+  }).addTo(map);
+}
+
 function cadrer(map, list){
   if(list.length) map.fitBounds(L.latLngBounds(list.map(h=>L.polyline(h.pts).getBounds())),{padding:[30,30]});
 }

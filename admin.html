@@ -55,6 +55,7 @@
 <script>
 const map = creerCarte();
 const hikes = new Map();   // id -> {id,name,date,km,type,gr34,pts}
+afficherGR34(map, 'data/gr34.geojson').then(l=>{ if(l && !hikes.size) map.fitBounds(l.getBounds()); });
 const layers = new Map();  // id -> L.layerGroup
 let selected = null;
 
