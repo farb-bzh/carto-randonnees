@@ -3,297 +3,117 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mes randonnées</title>
+<meta name="robots" content="noindex">
+<title>Mes randonnées sur le GR34</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<style>
-  :root{
-    --ink:#1C2B2A; --muted:#5E6B68; --paper:#EEF1EC; --white:#FFFFFF;
-    --balise:#C8102E; --line:#D5DBD4;
-  }
-  *{box-sizing:border-box}
-  html,body{margin:0;height:100%;font-family:"Avenir Next","Segoe UI",system-ui,sans-serif;color:var(--ink);background:var(--paper)}
-  .app{display:grid;grid-template-columns:340px 1fr;height:100%}
-  #map{height:100%;background:#dfe5dd}
-  aside{display:flex;flex-direction:column;background:var(--white);border-right:1px solid var(--line);min-height:0}
-  header{padding:20px 20px 14px}
-  h1{margin:0;font-size:1.5rem;font-weight:600;letter-spacing:-0.01em;display:flex;align-items:center;gap:10px}
-  .mark{display:inline-block;width:22px;height:10px;background:linear-gradient(var(--white) 0 50%,var(--balise) 50% 100%);border:1px solid var(--line)}
-  .totals{margin:6px 0 0;color:var(--muted);font-size:.95rem}
-  .add{margin:0 20px 12px;display:block}
-  .add input{position:absolute;width:1px;height:1px;opacity:0}
-  .add span{display:block;text-align:center;padding:11px 14px;border-radius:6px;background:var(--ink);color:var(--white);font-weight:600;cursor:pointer}
-  .add input:focus-visible + span{outline:3px solid var(--balise);outline-offset:2px}
-  .export{display:block;width:calc(100% - 40px);margin:0 20px 12px;padding:9px 14px;border-radius:6px;border:1px solid var(--ink);background:var(--white);color:var(--ink);font:inherit;font-weight:600;cursor:pointer}
-  .export:disabled{opacity:.45;cursor:default}
-  .msg{margin:0 20px 10px;font-size:.88rem;color:var(--muted);min-height:1em}
-  .msg.err{color:var(--balise)}
-  ul{list-style:none;margin:0;padding:0;overflow-y:auto;flex:1;border-top:1px solid var(--line)}
-  li{display:flex;align-items:center;gap:8px;padding:12px 20px;border-bottom:1px solid var(--line)}
-  li.sel{background:var(--paper);box-shadow:inset 4px 0 0 var(--balise)}
-  li button.go{flex:1;text-align:left;background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer}
-  li .n{display:block;font-weight:600}
-  li .d{display:block;font-size:.85rem;color:var(--muted);margin-top:2px}
-  li button.del{background:none;border:1px solid var(--line);border-radius:4px;color:var(--muted);padding:4px 8px;cursor:pointer;font:inherit;font-size:.8rem}
-  button:focus-visible{outline:3px solid var(--balise);outline-offset:2px}
-  .empty{padding:20px;color:var(--muted);font-size:.95rem;line-height:1.5}
-  .banner{position:absolute;z-index:1000;top:10px;left:50%;transform:translateX(-50%);background:var(--white);border:1px solid var(--line);padding:8px 12px;border-radius:6px;font-size:.85rem;display:none;max-width:90%}
-  .mapwrap{position:relative;height:100%}
-  @media (max-width:760px){
-    .app{grid-template-columns:1fr;grid-template-rows:55vh 1fr}
-    .mapwrap{order:1}
-    aside{order:2;border-right:0;border-top:1px solid var(--line)}
-  }
-</style>
+<link rel="stylesheet" href="style.css">
+<script src="commun.js"></script>
+<script src="chiffrement.js"></script>
 </head>
 <body>
 <div class="app">
   <aside>
     <header>
-      <h1><span class="mark" aria-hidden="true"></span>Mes randonnées</h1>
-      <p class="totals" id="totals">Chargement…</p>
+      <h1><span class="mark" aria-hidden="true"></span>Mes randonnées sur le GR34</h1>
+      <p class="totals" id="totals">Carte verrouillée</p>
     </header>
-    <label class="add">
-      <input type="file" id="file" multiple accept=".gpx,.tcx,.gz,.geojson,.json">
-      <span>Ajouter des traces (GPX, TCX) ou une sauvegarde</span>
-    </label>
-    <button class="export" id="export" type="button">Exporter la sauvegarde (GeoJSON)</button>
     <p class="msg" id="msg" role="status"></p>
     <ul id="list"></ul>
   </aside>
   <div class="mapwrap">
     <div id="map"></div>
-    <div class="banner" id="banner">Le fond de carte ne se charge pas ici. Vos traces restent affichées.</div>
+    <div class="banner" id="banner">Le fond de carte ne se charge pas ici. Les traces restent affichées.</div>
   </div>
 </div>
+
+<div class="lock pw" id="lock">
+  <form id="lockform">
+    <h2>Carte protégée</h2>
+    <p>Saisissez le mot de passe qui vous a été communiqué pour afficher les randonnées.</p>
+    <label>Mot de passe
+      <input type="password" id="pw" autocomplete="current-password" required>
+    </label>
+    <p class="msg err" id="lockerr" role="alert"></p>
+    <div class="actions">
+      <button class="btn primary" type="submit" id="lockok">Afficher la carte</button>
+    </div>
+  </form>
+</div>
+
 <script>
-const map = L.map('map').setView([48.11,-1.68], 8);
-let tileErrors = 0;
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{
-  maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">contributeurs OpenStreetMap</a>'
-}).on('tileerror',()=>{ if(++tileErrors===3) document.getElementById('banner').style.display='block'; }).addTo(map);
-
-const hikes = new Map();   // id -> {id,name,date,km,type,pts}
-const layers = new Map();  // id -> L.layerGroup
-let selected = null;
-const $ = id => document.getElementById(id);
-
-// Stockage local : IndexedDB, une entrée par randonnée (clé = id)
-const DB_NAME='carte-randonnees', DB_STORE='hikes';
-let dbPromise=null;
-function db(){
-  if(!dbPromise) dbPromise=new Promise((ok,ko)=>{
-    if(!('indexedDB' in window)) return ko(new Error('IndexedDB indisponible'));
-    const req=indexedDB.open(DB_NAME,1);
-    req.onupgradeneeded=()=>req.result.createObjectStore(DB_STORE,{keyPath:'id'});
-    req.onsuccess=()=>ok(req.result);
-    req.onerror=()=>ko(req.error);
-  });
-  return dbPromise;
-}
-async function tx(mode, fn){
-  const d=await db();
-  return new Promise((ok,ko)=>{
-    const t=d.transaction(DB_STORE,mode), req=fn(t.objectStore(DB_STORE));
-    t.oncomplete=()=>ok(req.result); t.onerror=()=>ko(t.error); t.onabort=()=>ko(t.error);
-  });
-}
-const store={
-  all:()=>tx('readonly',s=>s.getAll()),
-  put:h=>tx('readwrite',s=>s.put(h)),
-  del:id=>tx('readwrite',s=>s.delete(id)),
-};
+const DATA_URL='data/randonnees.enc.json', SESSION_KEY='carto-randonnees-mdp';
+const map = creerCarte();
+const hikes = new Map(), layers = new Map();
+let selected = null, envelope = null;
 
 function say(t, err){ const m=$('msg'); m.textContent=t; m.className='msg'+(err?' err':''); }
-
-function haversine(a,b){
-  const R=6371000, r=Math.PI/180;
-  const dLat=(b[0]-a[0])*r, dLon=(b[1]-a[1])*r;
-  const s=Math.sin(dLat/2)**2+Math.cos(a[0]*r)*Math.cos(b[0]*r)*Math.sin(dLon/2)**2;
-  return 2*R*Math.asin(Math.sqrt(s));
+function session(action, value){
+  try{
+    if(action==='get') return sessionStorage.getItem(SESSION_KEY);
+    if(action==='set') sessionStorage.setItem(SESSION_KEY, value);
+    if(action==='del') sessionStorage.removeItem(SESSION_KEY);
+  }catch(e){}
+  return null;
 }
-
-async function fileText(file){
-  if(file.name.toLowerCase().endsWith('.gz')){
-    if(!('DecompressionStream' in window)) throw new Error('Ce navigateur ne sait pas lire les fichiers .gz : décompressez-les d’abord.');
-    return await new Response(file.stream().pipeThrough(new DecompressionStream('gzip'))).text();
-  }
-  return await file.text();
-}
-
-function first(el, tag){ return el ? el.getElementsByTagNameNS('*',tag)[0] : undefined; }
-
-// Renvoie une liste de randonnées : une seule pour un GPX/TCX, plusieurs pour une sauvegarde GeoJSON
-async function parse(file){
-  const lower=file.name.toLowerCase();
-  if(lower.includes('.fit')) throw new Error(file.name+' : format FIT non lu. Exportez l’activité en GPX depuis Strava.');
-  const text=(await fileText(file)).trim();
-  if(/\.(geo)?json(\.gz)?$/.test(lower)) return parseGeoJSON(text, file.name);
-  return [parseTrack(text, file.name)];
-}
-
-// Altitude : conservée seulement si tous les points en ont une, pour garder des positions homogènes
-function ele(el, tag){ const v=parseFloat(first(el,tag)?.textContent); return isFinite(v)?v:null; }
-
-function parseTrack(text, fname){
-  const doc=new DOMParser().parseFromString(text,'application/xml');
-  if(doc.getElementsByTagName('parsererror').length) throw new Error(fname+' : fichier illisible.');
-  let raw=[], name, type, date;
-  const trkpts=doc.getElementsByTagNameNS('*','trkpt');
-  if(trkpts.length){
-    for(const p of trkpts){
-      const lat=parseFloat(p.getAttribute('lat')), lon=parseFloat(p.getAttribute('lon'));
-      if(isFinite(lat)&&isFinite(lon)) raw.push([lat,lon,ele(p,'ele')]);
-    }
-    const trk=first(doc,'trk');
-    name=first(trk,'name')?.textContent;
-    type=first(trk,'type')?.textContent;
-    date=first(trkpts[0],'time')?.textContent || first(first(doc,'metadata'),'time')?.textContent;
-  } else {
-    const tps=doc.getElementsByTagNameNS('*','Trackpoint');
-    for(const p of tps){
-      const lat=parseFloat(first(p,'LatitudeDegrees')?.textContent), lon=parseFloat(first(p,'LongitudeDegrees')?.textContent);
-      if(isFinite(lat)&&isFinite(lon)) raw.push([lat,lon,ele(p,'AltitudeMeters')]);
-    }
-    const act=first(doc,'Activity');
-    type=act?.getAttribute('Sport');
-    date=first(tps[0],'Time')?.textContent || first(act,'Id')?.textContent;
-  }
-  if(raw.length<2) throw new Error(fname+' : aucune trace GPS trouvée.');
-  let dist=0; for(let i=1;i<raw.length;i++) dist+=haversine(raw[i-1],raw[i]);
-  // allègement : un point tous les 8 m environ, pour le stockage
-  const pts=[raw[0]];
-  for(let i=1;i<raw.length-1;i++) if(haversine(pts[pts.length-1],raw[i])>=8) pts.push(raw[i]);
-  pts.push(raw[raw.length-1]);
-  const withEle=pts.every(p=>p[2]!==null);
-  const rounded=pts.map(([a,b,e])=>withEle?[+a.toFixed(5),+b.toFixed(5),+e.toFixed(1)]:[+a.toFixed(5),+b.toFixed(5)]);
-  return {id:makeId(date,rounded[0]), name:(name||fname.replace(/\.(gpx|tcx)(\.gz)?$/i,'')).trim(), date:date||null, type:type||null, km:+(dist/1000).toFixed(1), pts:rounded};
-}
-
-// Identifiant : date de début + premier point (lat, lon uniquement)
-function makeId(date, p){ return ((date||'')+'_'+p[0]+'_'+p[1]).replace(/[^0-9A-Za-z_.-]/g,''); }
-
-// Sauvegarde : FeatureCollection RFC 7946, une LineString par randonnée, positions [lon, lat(, alt)]
-function parseGeoJSON(text, fname){
-  let gj; try{ gj=JSON.parse(text); }catch(e){ throw new Error(fname+' : JSON illisible.'); }
-  if(gj?.type!=='FeatureCollection'||!Array.isArray(gj.features)) throw new Error(fname+' : ce n’est pas une FeatureCollection GeoJSON.');
-  const out=[];
-  for(const f of gj.features){
-    const c=f?.geometry?.type==='LineString'?f.geometry.coordinates:null;
-    if(!Array.isArray(c)||c.length<2) continue;
-    const pts=c.filter(p=>isFinite(p[0])&&isFinite(p[1])).map(p=>p.length>2&&isFinite(p[2])?[p[1],p[0],p[2]]:[p[1],p[0]]);
-    if(pts.length<2) continue;
-    const pr=f.properties||{};
-    let km=+pr.km;
-    if(!isFinite(km)){ let d=0; for(let i=1;i<pts.length;i++) d+=haversine(pts[i-1],pts[i]); km=+(d/1000).toFixed(1); }
-    out.push({id:pr.id||makeId(pr.date,pts[0]), name:String(pr.name||'Sans nom'), date:pr.date||null, type:pr.type||null, km, pts});
-  }
-  if(!out.length) throw new Error(fname+' : aucune randonnée (LineString) trouvée.');
-  return out;
-}
-
-function toGeoJSON(){
-  return {type:'FeatureCollection', features:[...hikes.values()].map(h=>({
-    type:'Feature',
-    properties:{id:h.id, name:h.name, date:h.date, type:h.type, km:h.km},
-    geometry:{type:'LineString', coordinates:h.pts.map(p=>p.length>2?[p[1],p[0],p[2]]:[p[1],p[0]])}
-  }))};
-}
-
-function draw(h){
-  const g=L.layerGroup([
-    L.polyline(h.pts,{color:'#FFFFFF',weight:7,opacity:.95}),
-    L.polyline(h.pts,{color:'#C8102E',weight:3.5})
-  ]);
-  g.eachLayer(l=>l.on('click',()=>select(h.id,false)));
-  g.getLayers()[1].bindPopup(()=>`<strong>${esc(h.name)}</strong><br>${fmtDate(h.date)}${h.km?' – '+h.km.toLocaleString('fr-FR')+' km':''}`);
-  g.addTo(map); layers.set(h.id,g);
-}
-
-function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function fmtDate(d){ if(!d) return 'Date inconnue'; const x=new Date(d); return isNaN(x)?'Date inconnue':x.toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'}); }
 
 function render(){
   const list=$('list'); list.innerHTML='';
-  $('export').disabled=!hikes.size;
   const arr=[...hikes.values()].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   const total=arr.reduce((s,h)=>s+h.km,0);
-  $('totals').textContent = arr.length ? `${arr.length} randonnée${arr.length>1?'s':''}, ${total.toLocaleString('fr-FR',{maximumFractionDigits:1})} km au total` : 'Aucune trace pour l’instant';
-  if(!arr.length){ list.innerHTML='<li class="empty">Exportez une activité depuis strava.com (menu « … » puis « Export GPX »), puis ajoutez le fichier ici.</li>'; return; }
+  $('totals').textContent = arr.length ? `${arr.length} randonnée${arr.length>1?'s':''}, ${fmtKm(total)} km` : 'Aucune randonnée publiée';
   for(const h of arr){
     const li=document.createElement('li'); if(h.id===selected) li.className='sel';
-    li.innerHTML=`<button class="go"><span class="n">${esc(h.name)}</span><span class="d">${fmtDate(h.date)} – ${h.km.toLocaleString('fr-FR')} km</span></button><button class="del" aria-label="Retirer ${esc(h.name)}">Retirer</button>`;
+    li.innerHTML=`<button class="go"><span class="n">${esc(h.name)}</span><span class="d">${fmtDate(h.date)} – ${fmtKm(h.km)} km</span></button>`;
     li.querySelector('.go').onclick=()=>select(h.id,true);
-    li.querySelector('.del').onclick=()=>remove(h.id);
     list.appendChild(li);
   }
 }
 
 function select(id, zoom){
   selected=id;
-  for(const [k,g] of layers){ const red=g.getLayers()[1]; red.setStyle({weight:k===id?5.5:3.5}); if(k===id) g.eachLayer(l=>l.bringToFront()); }
+  for(const [k,g] of layers){ const c=g.getLayers()[1]; c.setStyle({weight:k===id?5.5:3.5}); if(k===id) g.eachLayer(l=>l.bringToFront()); }
   if(zoom) map.fitBounds(L.polyline(hikes.get(id).pts).getBounds(),{padding:[30,30]});
   render();
 }
 
-function fitAll(){
-  const all=[...hikes.values()].flatMap(h=>[h.pts[0],h.pts[h.pts.length-1]]);
-  if(all.length) map.fitBounds(L.latLngBounds([...hikes.values()].map(h=>L.polyline(h.pts).getBounds())),{padding:[30,30]});
+function showLock(err){ $('lock').hidden=false; $('lockerr').textContent=err||''; $('pw').focus(); }
+
+// Déchiffre et affiche ; renvoie false si le mot de passe est faux
+async function unlock(password){
+  let gj;
+  try{ gj=await Chiffrement.decrypt(envelope, password); }
+  catch(e){ if(e.code==='BAD_PASSWORD') return false; throw e; }
+  for(const h of depuisGeoJSON(gj, 'Données publiées')){ hikes.set(h.id,h); layers.set(h.id, dessinerTrace(map, h, id=>select(id,false))); }
+  $('lock').hidden=true;
+  render(); cadrer(map,[...hikes.values()]);
+  return true;
 }
 
-async function save(h){
-  try{ await store.put(h); return true; }catch(e){ console.error(e); return false; }
-}
-
-async function remove(id){
-  const h=hikes.get(id); if(!h) return;
-  if(!confirm(`Retirer « ${h.name} » de la carte ?`)) return;
-  hikes.delete(id); map.removeLayer(layers.get(id)); layers.delete(id);
-  if(selected===id) selected=null;
-  try{ await store.del(id); }catch(e){ console.error(e); }
-  render(); say('Trace retirée.');
-}
-
-$('file').addEventListener('change', async e=>{
-  const files=[...e.target.files]; e.target.value='';
-  if(!files.length) return;
-  say(`Lecture de ${files.length} fichier${files.length>1?'s':''}…`);
-  let added=0, dup=0, unsaved=0; const errors=[];
-  for(const f of files){
-    try{
-      for(const h of await parse(f)){
-        if(hikes.has(h.id)){ dup++; continue; }
-        hikes.set(h.id,h); draw(h); added++;
-        if(!(await save(h))) unsaved++;
-      }
-    }catch(err){ errors.push(err.message); }
-  }
-  render(); if(added) fitAll();
-  let t=`${added} trace${added>1?'s':''} ajoutée${added>1?'s':''}.`;
-  if(dup) t+=` ${dup} déjà présente${dup>1?'s':''}.`;
-  if(unsaved) t+=` ${unsaved} non conservée${unsaved>1?'s':''} pour la prochaine ouverture (stockage indisponible).`;
-  if(errors.length) t+=' '+errors.join(' ');
-  say(t, errors.length>0 || unsaved>0);
-});
-
-$('export').addEventListener('click', ()=>{
-  if(!hikes.size) return;
-  const blob=new Blob([JSON.stringify(toGeoJSON())],{type:'application/geo+json'});
-  const d=new Date(), day=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob); a.download=`randonnees-${day}.geojson`;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
-  say(`Sauvegarde exportée : ${hikes.size} randonnée${hikes.size>1?'s':''}.`);
+$('lockform').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const pw=$('pw').value;
+  $('lockok').disabled=true; $('lockerr').textContent='Déchiffrement…';
+  try{
+    if(await unlock(pw)){ session('set', pw); $('pw').value=''; }
+    else showLock('Mot de passe incorrect.');
+  }catch(err){ console.error(err); showLock('Impossible de lire les données : '+err.message); }
+  finally{ $('lockok').disabled=false; }
 });
 
 (async function init(){
   try{
-    for(const h of await store.all()){ hikes.set(h.id,h); draw(h); }
-  }catch(e){ console.error(e); render(); say('Stockage indisponible : les traces ne seront pas conservées après fermeture.', true); return; }
-  // Demande de stockage persistant (le navigateur peut refuser)
-  if(navigator.storage?.persist){ try{ await navigator.storage.persist(); }catch(e){} }
-  render(); fitAll();
+    const r=await fetch(DATA_URL);
+    if(r.status===404){ $('lock').hidden=true; $('totals').textContent='Aucune randonnée publiée pour l’instant'; return; }
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    envelope=await r.json();
+  }catch(e){ console.error(e); $('lock').hidden=true; say('Impossible de charger les données : '+e.message, true); return; }
+  const saved=session('get');
+  if(saved){
+    try{ if(await unlock(saved)) return; }catch(e){ console.error(e); }
+    session('del');
+  }
+  showLock();
 })();
 </script>
 </body>

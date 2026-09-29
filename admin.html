@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Administration – Mes randonnées</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<link rel="stylesheet" href="style.css">
+<script src="commun.js"></script>
+<script src="chiffrement.js"></script>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <header>
+      <h1><span class="mark" aria-hidden="true"></span>Mes randonnées</h1>
+      <p class="role">Administration</p>
+      <p class="totals" id="totals">Chargement…</p>
+    </header>
+    <label class="add">
+      <input type="file" id="file" multiple accept=".gpx,.tcx,.gz,.geojson,.json">
+      <span>Ajouter des traces (GPX, TCX) ou une sauvegarde</span>
+    </label>
+    <button class="btn primary" id="publish" type="button">Exporter pour publication (chiffré)</button>
+    <button class="btn" id="export" type="button">Exporter la sauvegarde (GeoJSON)</button>
+    <p class="msg" id="msg" role="status"></p>
+    <ul id="list"></ul>
+  </aside>
+  <div class="mapwrap">
+    <div id="map"></div>
+    <div class="banner" id="banner">Le fond de carte ne se charge pas ici. Vos traces restent affichées.</div>
+  </div>
+</div>
+
+<dialog id="pubdlg" class="pw" aria-labelledby="pubtitle">
+  <form id="pubform" method="dialog">
+    <h2 id="pubtitle">Exporter pour publication</h2>
+    <p id="pubinfo"></p>
+    <label>Mot de passe (12 caractères minimum)
+      <input type="password" id="pw1" autocomplete="new-password" minlength="12" required>
+    </label>
+    <label>Confirmation
+      <input type="password" id="pw2" autocomplete="new-password" required>
+    </label>
+    <p class="msg err" id="puberr" role="alert"></p>
+    <div class="actions">
+      <button class="btn" type="submit" value="cancel" formnovalidate>Annuler</button>
+      <button class="btn primary" type="submit" value="ok" id="pubok">Chiffrer et télécharger</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const map = creerCarte();
+const hikes = new Map();   // id -> {id,name,date,km,type,gr34,pts}
+const layers = new Map();  // id -> L.layerGroup
+let selected = null;
+
+// Stockage local : IndexedDB, une entrée par randonnée (clé = id)
+const DB_NAME='carte-randonnees', DB_STORE='hikes';
+let dbPromise=null;
+function db(){
+  if(!dbPromise) dbPromise=new Promise((ok,ko)=>{
+    if(!('indexedDB' in window)) return ko(new Error('IndexedDB indisponible'));
+    const req=indexedDB.open(DB_NAME,1);
+    req.onupgradeneeded=()=>req.result.createObjectStore(DB_STORE,{keyPath:'id'});
+    req.onsuccess=()=>ok(req.result);
+    req.onerror=()=>ko(req.error);
+  });
+  return dbPromise;
+}
+async function tx(mode, fn){
+  const d=await db();
+  return new Promise((ok,ko)=>{
+    const t=d.transaction(DB_STORE,mode), req=fn(t.objectStore(DB_STORE));
+    t.oncomplete=()=>ok(req.result); t.onerror=()=>ko(t.error); t.onabort=()=>ko(t.error);
+  });
+}
+const store={
+  all:()=>tx('readonly',s=>s.getAll()),
+  put:h=>tx('readwrite',s=>s.put(h)),
+  del:id=>tx('readwrite',s=>s.delete(id)),
+};
+
+function say(t, err){ const m=$('msg'); m.textContent=t; m.className='msg'+(err?' err':''); }
+
+async function fileText(file){
+  if(file.name.toLowerCase().endsWith('.gz')){
+    if(!('DecompressionStream' in window)) throw new Error('Ce navigateur ne sait pas lire les fichiers .gz : décompressez-les d’abord.');
+    return await new Response(file.stream().pipeThrough(new DecompressionStream('gzip'))).text();
+  }
+  return await file.text();
+}
+
+function first(el, tag){ return el ? el.getElementsByTagNameNS('*',tag)[0] : undefined; }
+
+// Renvoie une liste de randonnées : une seule pour un GPX/TCX, plusieurs pour une sauvegarde GeoJSON
+async function parse(file){
+  const lower=file.name.toLowerCase();
+  if(lower.includes('.fit')) throw new Error(file.name+' : format FIT non lu. Exportez l’activité en GPX depuis Strava.');
+  const text=(await fileText(file)).trim();
+  if(/\.(geo)?json(\.gz)?$/.test(lower)){
+    let gj; try{ gj=JSON.parse(text); }catch(e){ throw new Error(file.name+' : JSON illisible.'); }
+    if(gj?.format==='carto-randonnees/chiffre') throw new Error(file.name+' : fichier chiffré de publication, pas une sauvegarde. Importez la sauvegarde GeoJSON.');
+    return depuisGeoJSON(gj, file.name);
+  }
+  return [parseTrack(text, file.name)];
+}
+
+// Altitude : conservée seulement si tous les points en ont une, pour garder des positions homogènes
+function ele(el, tag){ const v=parseFloat(first(el,tag)?.textContent); return isFinite(v)?v:null; }
+
+function parseTrack(text, fname){
+  const doc=new DOMParser().parseFromString(text,'application/xml');
+  if(doc.getElementsByTagName('parsererror').length) throw new Error(fname+' : fichier illisible.');
+  let raw=[], name, type, date;
+  const trkpts=doc.getElementsByTagNameNS('*','trkpt');
+  if(trkpts.length){
+    for(const p of trkpts){
+      const lat=parseFloat(p.getAttribute('lat')), lon=parseFloat(p.getAttribute('lon'));
+      if(isFinite(lat)&&isFinite(lon)) raw.push([lat,lon,ele(p,'ele')]);
+    }
+    const trk=first(doc,'trk');
+    name=first(trk,'name')?.textContent;
+    type=first(trk,'type')?.textContent;
+    date=first(trkpts[0],'time')?.textContent || first(first(doc,'metadata'),'time')?.textContent;
+  } else {
+    const tps=doc.getElementsByTagNameNS('*','Trackpoint');
+    for(const p of tps){
+      const lat=parseFloat(first(p,'LatitudeDegrees')?.textContent), lon=parseFloat(first(p,'LongitudeDegrees')?.textContent);
+      if(isFinite(lat)&&isFinite(lon)) raw.push([lat,lon,ele(p,'AltitudeMeters')]);
+    }
+    const act=first(doc,'Activity');
+    type=act?.getAttribute('Sport');
+    date=first(tps[0],'Time')?.textContent || first(act,'Id')?.textContent;
+  }
+  if(raw.length<2) throw new Error(fname+' : aucune trace GPS trouvée.');
+  let dist=0; for(let i=1;i<raw.length;i++) dist+=haversine(raw[i-1],raw[i]);
+  // allègement : un point tous les 8 m environ, pour le stockage
+  const pts=[raw[0]];
+  for(let i=1;i<raw.length-1;i++) if(haversine(pts[pts.length-1],raw[i])>=8) pts.push(raw[i]);
+  pts.push(raw[raw.length-1]);
+  const withEle=pts.every(p=>p[2]!==null);
+  const rounded=pts.map(([a,b,e])=>withEle?[+a.toFixed(5),+b.toFixed(5),+e.toFixed(1)]:[+a.toFixed(5),+b.toFixed(5)]);
+  return {id:makeId(date,rounded[0]), name:(name||fname.replace(/\.(gpx|tcx)(\.gz)?$/i,'')).trim(), date:date||null, type:type||null, km:+(dist/1000).toFixed(1), gr34:false, pts:rounded};
+}
+
+function draw(h){ layers.set(h.id, dessinerTrace(map, h, id=>select(id,false))); }
+function redraw(h){ map.removeLayer(layers.get(h.id)); draw(h); }
+const gr34List=()=>[...hikes.values()].filter(h=>h.gr34);
+
+function render(){
+  const list=$('list'); list.innerHTML='';
+  const arr=[...hikes.values()].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const nGr=gr34List().length;
+  $('export').disabled=!hikes.size;
+  $('publish').disabled=!nGr;
+  const total=arr.reduce((s,h)=>s+h.km,0);
+  $('totals').textContent = arr.length ? `${arr.length} randonnée${arr.length>1?'s':''}, ${fmtKm(total)} km au total, dont ${nGr} sur le GR34` : 'Aucune trace pour l’instant';
+  if(!arr.length){ list.innerHTML='<li class="empty">Exportez une activité depuis strava.com (menu « … » puis « Export GPX »), puis ajoutez le fichier ici.</li>'; return; }
+  for(const h of arr){
+    const li=document.createElement('li'); if(h.id===selected) li.className='sel';
+    li.innerHTML=`<button class="go"><span class="n">${esc(h.name)}</span><span class="d">${fmtDate(h.date)} – ${fmtKm(h.km)} km</span></button>`+
+      `<label class="gr" title="Publier sur la carte partagée"><input type="checkbox" ${h.gr34?'checked':''}>GR34</label>`+
+      `<button class="del" aria-label="Retirer ${esc(h.name)}">Retirer</button>`;
+    li.querySelector('.go').onclick=()=>select(h.id,true);
+    li.querySelector('.gr input').onchange=e=>toggleGr34(h.id, e.target.checked);
+    li.querySelector('.del').onclick=()=>remove(h.id);
+    list.appendChild(li);
+  }
+}
+
+async function toggleGr34(id, on){
+  const h=hikes.get(id); h.gr34=on; redraw(h);
+  const ok=await save(h);
+  render(); say(ok?(on?`« ${h.name} » sera publiée.`:`« ${h.name} » ne sera pas publiée.`):'Changement non enregistré (stockage indisponible).', !ok);
+}
+
+function select(id, zoom){
+  selected=id;
+  for(const [k,g] of layers){ const c=g.getLayers()[1]; c.setStyle({weight:k===id?5.5:3.5}); if(k===id) g.eachLayer(l=>l.bringToFront()); }
+  if(zoom) map.fitBounds(L.polyline(hikes.get(id).pts).getBounds(),{padding:[30,30]});
+  render();
+}
+
+async function save(h){
+  try{ await store.put(h); return true; }catch(e){ console.error(e); return false; }
+}
+
+async function remove(id){
+  const h=hikes.get(id); if(!h) return;
+  if(!confirm(`Retirer « ${h.name} » de la carte ?`)) return;
+  hikes.delete(id); map.removeLayer(layers.get(id)); layers.delete(id);
+  if(selected===id) selected=null;
+  try{ await store.del(id); }catch(e){ console.error(e); }
+  render(); say('Trace retirée.');
+}
+
+function download(blob, name){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download=name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+
+$('file').addEventListener('change', async e=>{
+  const files=[...e.target.files]; e.target.value='';
+  if(!files.length) return;
+  say(`Lecture de ${files.length} fichier${files.length>1?'s':''}…`);
+  let added=0, dup=0, unsaved=0; const errors=[];
+  for(const f of files){
+    try{
+      for(const h of await parse(f)){
+        if(hikes.has(h.id)){ dup++; continue; }
+        hikes.set(h.id,h); draw(h); added++;
+        if(!(await save(h))) unsaved++;
+      }
+    }catch(err){ errors.push(err.message); }
+  }
+  render(); if(added) cadrer(map,[...hikes.values()]);
+  let t=`${added} trace${added>1?'s':''} ajoutée${added>1?'s':''}.`;
+  if(dup) t+=` ${dup} déjà présente${dup>1?'s':''}.`;
+  if(unsaved) t+=` ${unsaved} non conservée${unsaved>1?'s':''} pour la prochaine ouverture (stockage indisponible).`;
+  if(errors.length) t+=' '+errors.join(' ');
+  say(t, errors.length>0 || unsaved>0);
+});
+
+$('export').addEventListener('click', ()=>{
+  if(!hikes.size) return;
+  const d=new Date(), day=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  download(new Blob([JSON.stringify(versGeoJSON([...hikes.values()]))],{type:'application/geo+json'}), `randonnees-${day}.geojson`);
+  say(`Sauvegarde exportée : ${hikes.size} randonnée${hikes.size>1?'s':''}.`);
+});
+
+// Export chiffré : seules les randonnées cochées « GR34 » sont publiées
+$('publish').addEventListener('click', ()=>{
+  const n=gr34List().length; if(!n) return;
+  $('pubinfo').textContent=`${n} randonnée${n>1?'s':''} cochée${n>1?'s':''} « GR34 » ser${n>1?'ont':'a'} chiffrée${n>1?'s':''} dans le fichier randonnees.enc.json, à placer dans le dossier data/ du dépôt.`;
+  $('pw1').value=''; $('pw2').value=''; $('puberr').textContent='';
+  $('pubdlg').showModal();
+});
+$('pubform').addEventListener('submit', async e=>{
+  if(e.submitter?.value!=='ok') return;          // Annuler : la fenêtre se ferme
+  e.preventDefault();
+  const p1=$('pw1').value, p2=$('pw2').value;
+  if(p1.length<12){ $('puberr').textContent='Le mot de passe doit faire au moins 12 caractères.'; return; }
+  if(p1!==p2){ $('puberr').textContent='Les deux mots de passe sont différents.'; return; }
+  $('pubok').disabled=true; $('puberr').textContent='Chiffrement en cours…';
+  try{
+    const list=gr34List();
+    const env=await Chiffrement.encrypt(versGeoJSON(list), p1);
+    download(new Blob([JSON.stringify(env)],{type:'application/json'}), 'randonnees.enc.json');
+    $('pubdlg').close();
+    say(`Fichier chiffré exporté (${list.length} randonnée${list.length>1?'s':''}). Copiez-le dans data/, puis commit et push.`);
+  }catch(err){ console.error(err); $('puberr').textContent='Échec du chiffrement : '+err.message; }
+  finally{ $('pubok').disabled=false; $('pw1').value=''; $('pw2').value=''; }
+});
+
+(async function init(){
+  try{
+    for(const h of await store.all()){ hikes.set(h.id,h); draw(h); }
+  }catch(e){ console.error(e); render(); say('Stockage indisponible : les traces ne seront pas conservées après fermeture.', true); return; }
+  // Demande de stockage persistant (le navigateur peut refuser)
+  if(navigator.storage?.persist){ try{ await navigator.storage.persist(); }catch(e){} }
+  render(); cadrer(map,[...hikes.values()]);
+})();
+</script>
+</body>
+</html>
