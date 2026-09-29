@@ -99,7 +99,8 @@ function htmlProgression(resume){
   if(!resume) return '';
   const pct=resume.pourcentage, reste=Math.max(0, resume.total_km-resume.parcouru_km);
   const secs=resume.sections.filter(s=>s.parcouru_km>0).map(s=>
-    `<li><span class="n">${esc(s.nom.replace('Chemin des Douaniers, ',''))}</span><span class="d">${fmtKm(s.parcouru_km)} / ${fmtKm(s.total_km)} km</span></li>`).join('');
+    `<li><span class="n">${esc(s.nom.replace('Chemin des Douaniers, ',''))}</span><span class="d">${fmtKm(s.parcouru_km)} / ${fmtKm(s.total_km)} km`+
+    ` – <strong>${(s.total_km?100*s.parcouru_km/s.total_km:0).toLocaleString('fr-FR',{minimumFractionDigits:1,maximumFractionDigits:1})} %</strong></span></li>`).join('');
   return `<div class="prog">
     <p class="prog-pct">${pct.toLocaleString('fr-FR',{minimumFractionDigits:1,maximumFractionDigits:1})} %</p>
     <p class="prog-sous">du GR34 parcouru</p>
