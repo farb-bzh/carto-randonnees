@@ -182,11 +182,15 @@ const Progression = (() => {
       let gr=0, portion=0; for(let i=debut;i<fin;i++){ portion+=ref.len[i]; if(!couvert[i]) gr+=ref.len[i]; }
       if(gr<=p.trou) continue;                         // déjà comblé automatiquement
       let trace=0; for(let i=avant.i1+1;i<=apres.i0;i++) trace+=haversine(pts[i-1],pts[i]);
-      // garde-fou : si la portion du GR34 entre A et B est bien plus longue que le détour de la trace,
-      // A et B ne délimitent pas un contournement (ex. : retour vers le point de départ d'une boucle)
+      // garde-fous : A et B ne délimitent pas un contournement (ex. : retour intérieur d'une boucle, retour au départ)
+      //  - si la portion du GR34 entre A et B est bien plus longue que le détour de la trace ;
+      //  - si cette portion a été en majorité parcourue (à l'aller d'une boucle, par exemple).
       if(portion>3*trace+500) continue;
+      if(gr<0.5*portion) continue;
+      // morceaux non couverts de la portion, pour l'affichage
+      const trous=[]; for(let i=debut;i<fin;){ if(couvert[i]){ i++; continue; } let j=i; while(j<fin && !couvert[j]) j++; trous.push([i,j]); i=j; }
       const mil=(debut+fin)>>1;
-      out.push({rando:h.id, debut, fin, gr_m:Math.round(gr), trace_m:Math.round(trace), i_a:avant.i1, i_b:apres.i0,
+      out.push({rando:h.id, debut, fin, trous, gr_m:Math.round(gr), trace_m:Math.round(trace), i_a:avant.i1, i_b:apres.i0,
         km_trace:+(avant.km0/1000+avant.m/1000).toFixed(2), centre:[+ref.mLat[mil].toFixed(5), +ref.mLon[mil].toFixed(5)]});
     }
     return out;

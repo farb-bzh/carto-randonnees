@@ -133,8 +133,9 @@ function afficherContours(){
 
 function voirContour(c){
   if(coucheContour) map.removeLayer(coucheContour);
-  const pts=Progression.portion(ref, c.debut, c.fin);
-  coucheContour=L.polyline(pts,{color:'#E67E22', weight:7, opacity:.9, dashArray:'8 6'}).addTo(map);
+  // seulement les morceaux du GR34 non parcourus
+  const lignes=c.trous.map(([a,b])=>Progression.portion(ref, a, b));
+  coucheContour=L.polyline(lignes,{color:'#E67E22', weight:7, opacity:.9, dashArray:'8 6'}).addTo(map);
   map.fitBounds(coucheContour.getBounds(),{padding:[60,60], maxZoom:17});
 }
 

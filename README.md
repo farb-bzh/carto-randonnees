@@ -42,6 +42,8 @@ Seul le tracé principal compte (pas les variantes).
    sont retirées (croisements, frôlements). Un morceau parcouru plusieurs fois ne compte qu'une fois.
 4. **Contournements** : quand une trace quitte le GR34 puis le rejoint plus loin (balisage modifié, sentier parallèle),
    la portion du GR34 contournée est listée dans l'admin. Elle ne compte que si vous choisissez « Compter la portion ».
+   Ne sont proposées que les portions en majorité non parcourues, et pas beaucoup plus longues que le détour
+   (sinon il s'agit du retour intérieur d'une boucle, pas d'un contournement).
    La décision est enregistrée avec la randonnée (navigateur et sauvegarde GeoJSON).
 
 Les réglages se modifient dans « Réglages du calcul » (mémorisés dans le navigateur).
